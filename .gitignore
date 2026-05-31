@@ -19,6 +19,12 @@
 
 # production
 /build
+/dist
+
+# rust / tauri build output (Cargo workspace target lives at the repo root now)
+/target
+/src-tauri/target
+**/target
 
 # misc
 .DS_Store

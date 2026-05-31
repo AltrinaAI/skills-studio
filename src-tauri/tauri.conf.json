@@ -1,0 +1,47 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Agent Skill Studio",
+  "version": "0.1.0",
+  "identifier": "ai.generalagency.skillstudio",
+  "build": {
+    "beforeDevCommand": "npm run dev:vite",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Agent Skill Studio",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 720,
+        "minHeight": 480
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "dmg", "app", "deb", "appimage"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": { "../examples": "examples" },
+    "category": "DeveloperTool",
+    "shortDescription": "View and edit Agent Skills",
+    "longDescription": "Discover, view, and edit Agent Skills across Claude Code, Codex, Cursor, and OpenClaw.",
+    "linux": {
+      "deb": { "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"] }
+    },
+    "macOS": { "minimumSystemVersion": "10.15" },
+    "windows": { "nsis": { "installMode": "perMachine" } }
+  }
+}

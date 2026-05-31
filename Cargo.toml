@@ -1,0 +1,12 @@
+# Cargo workspace: the Tauri desktop app, the shared (GUI-free) core, and the
+# headless HTTP server (for the WSL2 / remote-backend mode).
+[workspace]
+members = ["src-tauri", "crates/skill-core", "crates/skill-server"]
+resolver = "2"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
