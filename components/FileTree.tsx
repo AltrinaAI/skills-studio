@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import type { TreeNode } from "@/lib/types";
-import { humanSize } from "@/lib/fileTypes";
+
+const HOVER = "hover:bg-black/5 dark:hover:bg-white/6";
 
 function TreeItem({
   node,
@@ -27,7 +28,7 @@ function TreeItem({
           onClick={() => setOpen((o) => !o)}
           aria-expanded={open}
           title={node.rel}
-          className="flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left text-sm text-fg hover:bg-panel"
+          className={`flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left text-sm text-fg ${HOVER}`}
         >
           <span aria-hidden className="w-3 text-muted">{open ? "▾" : "▸"}</span>
           <span aria-hidden>{open ? "📂" : "📁"}</span>
@@ -52,16 +53,14 @@ function TreeItem({
         style={indent}
         onClick={() => onSelect(node.rel)}
         title={node.rel}
+        aria-current={isSelected ? "true" : undefined}
         className={`flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left text-sm ${
-          isSelected ? "bg-accent-soft font-medium text-accent" : "text-fg hover:bg-panel"
+          isSelected ? "bg-black/6 font-medium text-fg dark:bg-white/10" : `text-fg ${HOVER}`
         }`}
       >
         <span className="w-3" />
         <span aria-hidden>{node.isSkillMd ? "📘" : node.glyph}</span>
         <span className={`truncate ${node.isSkillMd ? "font-semibold" : ""}`}>{node.name}</span>
-        {node.size != null && (
-          <span className="ml-auto pl-2 text-[0.65rem] text-muted">{humanSize(node.size)}</span>
-        )}
       </button>
     </li>
   );
