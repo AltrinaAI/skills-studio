@@ -69,7 +69,9 @@ const markdownHighlight = HighlightStyle.define([
     padding: "0.05em 0.3em",
   },
   { tag: t.quote, color: "var(--muted)", fontStyle: "italic" },
-  { tag: t.list, color: "var(--muted)" },
+  // List item text reads as normal body copy; the bullet/number marker is
+  // dimmed separately below (processingInstruction).
+  { tag: t.list, color: "var(--fg)" },
   // Markup punctuation (#, **, -, >, link brackets, ---): visible but secondary.
   { tag: t.processingInstruction, color: "var(--mark)" },
   { tag: t.contentSeparator, color: "var(--mark)", fontWeight: "700" },
