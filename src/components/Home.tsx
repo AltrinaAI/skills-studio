@@ -5,6 +5,7 @@ import { Spinner, ThemeToggle } from "./ui";
 import NavBar from "./NavBar";
 import { FolderIcon } from "./FileIcon";
 import FolderPicker from "./FolderPicker";
+import NewSkillDialog from "./NewSkillDialog";
 import SecretsManager from "./SecretsManager";
 import { useRecents, removeRecent } from "./recents";
 import { agentColor, kindMeta, KIND_TAG, AGENT_GROUP_INFO } from "@/lib/agents";
@@ -20,6 +21,13 @@ const EXAMPLES = [
 
 const baseName = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
 
+function PlusIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
 function KeyIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -154,6 +162,7 @@ export default function Home({
   const recents = useRecents();
   const [path, setPath] = useState("");
   const [secretsOpen, setSecretsOpen] = useState(false);
+  const [newOpen, setNewOpen] = useState(false);
 
   useEffect(() => {
     if (!secretsOpen) return;
@@ -192,6 +201,15 @@ export default function Home({
       <NavBar>
         <button
           type="button"
+          onClick={() => setNewOpen(true)}
+          title="New skill"
+          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-muted hover:bg-panel hover:text-fg"
+        >
+          <PlusIcon />
+          <span className="hidden text-xs sm:inline">New</span>
+        </button>
+        <button
+          type="button"
           onClick={() => setSecretsOpen(true)}
           title="Secrets"
           className="flex items-center gap-1.5 rounded-md px-2 py-1 text-muted hover:bg-panel hover:text-fg"
@@ -208,7 +226,11 @@ export default function Home({
           <p className="mt-1.5 text-sm text-muted">
             A skill is a folder containing a{" "}
             <code className="rounded bg-panel px-1 py-0.5 font-mono text-[0.8em]">SKILL.md</code>. Browse for one, paste a
-            path, or pick from the skills found on your machine below.
+            path, pick from the skills found on your machine below, or{" "}
+            <button type="button" onClick={() => setNewOpen(true)} className="font-medium text-accent underline hover:opacity-80">
+              create a new one
+            </button>
+            .
           </p>
 
           <form
@@ -317,6 +339,16 @@ export default function Home({
             onOpen(p);
           }}
           onClose={() => setShowPicker(false)}
+        />
+      )}
+
+      {newOpen && (
+        <NewSkillDialog
+          onClose={() => setNewOpen(false)}
+          onCreated={(root) => {
+            setNewOpen(false);
+            onOpen(root);
+          }}
         />
       )}
 

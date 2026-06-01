@@ -149,6 +149,10 @@ fn handle(method: &Method, url: &str, body: &str, dist: &Path) -> Reply {
             json_reply(sync::sync_skill(&s("root"), &s("target"), overwrite, link))
         }
         (Method::Post, "/api/delete-skill") => json_reply(sync::delete_skill(&s("root"))),
+        (Method::Get, "/api/skill-homes") => json_reply(sync::skill_homes()),
+        (Method::Post, "/api/create-skill") => {
+            json_reply(sync::create_skill(&s("target"), &s("name"), &s("content")))
+        }
         (Method::Post, "/api/detect-required-env") => {
             let root = s("root");
             json_reply(secrets::secret_keys().map(|keys| skill::scan_for_env_vars(Path::new(&root), &keys)))

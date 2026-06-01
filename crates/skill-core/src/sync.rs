@@ -78,6 +78,20 @@ pub struct DeleteResult {
     was_link: bool,
 }
 
+/// A directory a brand-new skill can be created in (the same destinations sync
+/// targets — "all agents" vs "Claude Code"), with its absolute path resolved.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillHome {
+    /// Stable id passed back to `create_skill` ("universal" | "claude-code").
+    id: String,
+    label: String,
+    /// Absolute path of the canonical dir a new skill lands in.
+    dir: String,
+    /// Agent display names this location serves.
+    reaches: Vec<String>,
+}
+
 /// The personal/global skills directory each agent reads. Kept for the secret
 /// manager, which installs the activation skill into each agent's own dir.
 pub fn agent_user_dir(agent: &str) -> Option<PathBuf> {
@@ -201,6 +215,59 @@ fn sync_skill_in(
         copy_tree(&root_path, &dest, &mut total)?;
         Ok(SyncResult { dest: dest.to_string_lossy().into_owned(), linked: false })
     }
+}
+
+/// True if `name` is a valid skill/folder name per the Agent Skills spec:
+/// 1-64 chars, lowercase alphanumeric with single hyphens, no leading/trailing
+/// or repeated hyphen. Mirrors the frontend's NAME_REGEX (defense in depth — the
+/// dialog validates too, but this command can be called directly).
+fn valid_skill_name(name: &str) -> bool {
+    if name.is_empty() || name.len() > 64 {
+        return false;
+    }
+    if name.starts_with('-') || name.ends_with('-') || name.contains("--") {
+        return false;
+    }
+    name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+/// The places a new skill can be created — the same destinations as sync, with
+/// the canonical landing dir resolved to an absolute path for display.
+pub fn skill_homes() -> Result<Vec<SkillHome>, String> {
+    let home = dirs::home_dir().ok_or_else(|| "No home directory.".to_string())?;
+    Ok(DESTS
+        .iter()
+        .map(|d| SkillHome {
+            id: d.id.into(),
+            label: d.label.into(),
+            dir: home.join(d.cohort[0]).to_string_lossy().into_owned(),
+            reaches: d.reaches.iter().map(|s| s.to_string()).collect(),
+        })
+        .collect())
+}
+
+/// Create a new skill folder `<home dir>/<name>` in the chosen destination and
+/// write `content` (a fully-rendered SKILL.md) into it. Refuses to clobber an
+/// existing folder. Returns the new skill's canonical root path.
+pub fn create_skill(target: &str, name: &str, content: &str) -> Result<String, String> {
+    let home = dirs::home_dir().ok_or_else(|| "No home directory.".to_string())?;
+    create_skill_in(&home, target, name, content)
+}
+
+fn create_skill_in(home: &Path, target: &str, name: &str, content: &str) -> Result<String, String> {
+    if !valid_skill_name(name) {
+        return Err("Name must be lowercase letters, digits and single hyphens (e.g. \"my-skill\").".into());
+    }
+    let d = dest_by_id(target).ok_or_else(|| format!("Unknown skill location: {target}"))?;
+    let dir = home.join(d.cohort[0]);
+    let dest = dir.join(name);
+    if dest.symlink_metadata().is_ok() {
+        return Err(format!("A skill named \"{name}\" already exists in {}.", dir.display()));
+    }
+    std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+    std::fs::write(dest.join("SKILL.md"), content).map_err(|e| e.to_string())?;
+    let canon = std::fs::canonicalize(&dest).unwrap_or(dest);
+    Ok(canon.to_string_lossy().into_owned())
 }
 
 /// Permanently remove a skill folder. Guarded: it must contain SKILL.md and live
@@ -376,6 +443,43 @@ mod tests {
         assert!(uni.present);
         assert!(uni.is_source);
         assert_eq!(uni.reached_via.as_deref(), Some(".codex/skills"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn validates_skill_names() {
+        assert!(valid_skill_name("my-skill"));
+        assert!(valid_skill_name("pdf"));
+        assert!(valid_skill_name("a1-b2-c3"));
+        assert!(!valid_skill_name(""));
+        assert!(!valid_skill_name("My-Skill")); // uppercase
+        assert!(!valid_skill_name("-skill")); // leading hyphen
+        assert!(!valid_skill_name("skill-")); // trailing hyphen
+        assert!(!valid_skill_name("a--b")); // repeated hyphen
+        assert!(!valid_skill_name("a b")); // space
+        assert!(!valid_skill_name("../escape")); // path chars
+        assert!(!valid_skill_name(&"x".repeat(65))); // too long
+    }
+
+    #[test]
+    fn creates_skill_in_destination() {
+        let base = std::env::temp_dir().join(format!("ass_create_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let home = base.join("home");
+
+        let content = "---\nname: new-skill\ndescription: A test skill.\n---\n\nBody.\n";
+        let root = create_skill_in(&home, "universal", "new-skill", content).unwrap();
+        let dest = home.join(".agents/skills/new-skill");
+        assert_eq!(std::fs::canonicalize(&dest).unwrap().to_string_lossy(), root);
+        assert_eq!(std::fs::read_to_string(dest.join("SKILL.md")).unwrap(), content);
+
+        // Creating onto an existing folder is refused.
+        assert!(create_skill_in(&home, "universal", "new-skill", content).is_err());
+        // Bad name is rejected before touching the filesystem.
+        assert!(create_skill_in(&home, "claude-code", "Bad Name", content).is_err());
+        // Unknown destination is rejected.
+        assert!(create_skill_in(&home, "nope", "ok-name", content).is_err());
+
         let _ = std::fs::remove_dir_all(&base);
     }
 

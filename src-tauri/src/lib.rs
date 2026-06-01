@@ -73,6 +73,16 @@ async fn delete_skill(root: String) -> Result<sync::DeleteResult, String> {
 }
 
 #[tauri::command]
+async fn skill_homes() -> Result<Vec<sync::SkillHome>, String> {
+    sync::skill_homes()
+}
+
+#[tauri::command]
+async fn create_skill(target: String, name: String, content: String) -> Result<String, String> {
+    sync::create_skill(&target, &name, &content)
+}
+
+#[tauri::command]
 async fn git_info(root: String) -> Result<gitops::GitInfo, String> {
     gitops::git_info(&root)
 }
@@ -138,6 +148,8 @@ pub fn run() {
             sync_targets,
             sync_skill,
             delete_skill,
+            skill_homes,
+            create_skill,
             git_info,
             git_init,
             git_commit,

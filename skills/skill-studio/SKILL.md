@@ -1,6 +1,6 @@
 ---
 name: skill-studio
-description: Use this skill to load the secrets and API keys you manage in Skill Studio (for example OPENAI_API_KEY, GITHUB_TOKEN, or a database URL) into your environment. Run it once at the start of a task whenever another skill or command needs credentials, or reports a missing API key, token, or environment variable.
+description: Use this skill to load the secrets you manage in Skill Studio (for example OPENAI_API_KEY, GITHUB_TOKEN) into your environment. Run it once at the start of a task whenever another skill or command needs credentials, or reports a missing API key, token, or environment variable.
 ---
 
 # Skill Studio — activate secrets

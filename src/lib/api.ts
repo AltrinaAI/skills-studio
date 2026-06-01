@@ -191,6 +191,53 @@ export const syncSkill = (root: string, target: string, overwrite: boolean, link
     ? invoke<SyncResult>("sync_skill", { root, target, overwrite, link })
     : http<SyncResult>("POST", "sync-skill", { root, target, overwrite, link });
 
+// --- create a brand-new skill ---
+export interface SkillHome {
+  /** Stable id passed back to createSkill ("universal" | "claude-code"). */
+  id: string;
+  label: string;
+  /** Absolute path of the dir a new skill lands in. */
+  dir: string;
+  /** Agent display names this location serves. */
+  reaches: string[];
+}
+export const skillHomes = () =>
+  isTauri ? invoke<SkillHome[]>("skill_homes") : http<SkillHome[]>("GET", "skill-homes");
+
+/** A starter SKILL.md body: heading + the canonical Overview/When-to-use/Instructions skeleton. */
+function starterBody(name: string): string {
+  const title = name.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  return [
+    `# ${title}`,
+    "",
+    "One or two sentences describing what this skill does.",
+    "",
+    "## When to use",
+    "",
+    "Use this skill when … — describe the trigger conditions so the agent activates it reliably.",
+    "",
+    "## Instructions",
+    "",
+    "1. First step.",
+    "2. Second step.",
+    "",
+    "## Resources",
+    "",
+    "Add supporting files in this folder and link to them here.",
+  ].join("\n");
+}
+
+/**
+ * Create a new skill folder in the chosen location with a scaffolded SKILL.md
+ * (frontmatter + starter body). Returns the new skill's root path; load it next.
+ */
+export async function createSkill(target: string, name: string, description: string): Promise<string> {
+  const content = serializeSkillMd({ name, description }, starterBody(name));
+  return isTauri
+    ? invoke<string>("create_skill", { target, name, content })
+    : http<string>("POST", "create-skill", { target, name, content });
+}
+
 // --- delete a skill (guarded; unlinks a synced copy, else removes the folder) ---
 export interface DeleteResult {
   removed: string;
