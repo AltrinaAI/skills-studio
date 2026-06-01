@@ -48,6 +48,38 @@ jobs:
 
       - run: npm ci
 
+      - name: Setup Java for Windows signing
+        if: matrix.platform == 'windows-latest'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Download jsign for Windows signing
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $version = "7.4"
+          $dest = "$env:RUNNER_TEMP\jsign.jar"
+          Invoke-WebRequest -Uri "https://github.com/ebourg/jsign/releases/download/$version/jsign-$version.jar" -OutFile $dest
+          "JSIGN_JAR=$dest" >> $env:GITHUB_ENV
+
+      - name: Azure login for Windows signing
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:AZURE_CLIENT_ID)) {
+            Write-Warning "Azure signing secrets not set; Windows artifacts will be built unsigned."
+            exit 0
+          }
+          az login --service-principal -u $env:AZURE_CLIENT_ID -p $env:AZURE_CLIENT_SECRET --tenant $env:AZURE_TENANT_ID | Out-Null
+          "AZURE_SIGNING_ENDPOINT=${{ secrets.AZURE_SIGNING_ENDPOINT }}" >> $env:GITHUB_ENV
+          "AZURE_SIGNING_ALIAS=${{ secrets.AZURE_SIGNING_ALIAS }}" >> $env:GITHUB_ENV
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
