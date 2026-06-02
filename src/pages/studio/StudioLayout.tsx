@@ -10,7 +10,7 @@ import Sidebar from "./Sidebar";
 import ManagePanel from "./ManagePanel";
 import ExportDialog from "./ExportDialog";
 import { useStudio, skillName } from "./StudioContext";
-import { studioFilePath, studioPath } from "@/lib/routes";
+import { studioFilePath, studioHistoryPath, studioPath } from "@/lib/routes";
 
 /**
  * The skill workbench chrome: top bar + file sidebar + the routed file pane
@@ -22,8 +22,11 @@ export default function StudioLayout() {
   const navigate = useNavigate();
   // Which file is open: the `file/*` splat, else SKILL.md (the index route).
   // useMatch resolves against the current location, so it works here above the
-  // Outlet (the splat param isn't visible to this parent via useParams).
-  const selected = useMatch("/studio/:root/file/*")?.params["*"] || "SKILL.md";
+  // Outlet (the splat param isn't visible to this parent via useParams). On the
+  // History route no file is open, so nothing in the sidebar is highlighted.
+  const onHistoryRoute = useMatch("/studio/:root/history") != null;
+  const fileRel = useMatch("/studio/:root/file/*")?.params["*"];
+  const selected = onHistoryRoute ? null : fileRel || "SKILL.md";
 
   const [manageOpen, setManageOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -54,6 +57,8 @@ export default function StudioLayout() {
         onHome={() => navigate("/")}
         skillName={skillName(data)}
         selected={selected}
+        historyActive={onHistoryRoute}
+        onHistory={() => navigate(studioHistoryPath(data.root))}
         onManage={() => setManageOpen(true)}
         onExport={onExport}
         toggleTheme={toggleTheme}
@@ -70,6 +75,10 @@ export default function StudioLayout() {
           dirName={data.dirName}
           kind={skillKind(data.root).kind}
           onClose={() => setManageOpen(false)}
+          onViewHistory={() => {
+            setManageOpen(false);
+            navigate(studioHistoryPath(data.root));
+          }}
           onDeleted={onDeleted}
         />
       )}

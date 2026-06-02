@@ -136,6 +136,21 @@ async fn git_log(root: String, limit: usize) -> Result<Vec<gitops::Commit>, Stri
 }
 
 #[tauri::command]
+async fn git_status(root: String) -> Result<Vec<gitops::FileChange>, String> {
+    gitops::git_status(&root)
+}
+
+#[tauri::command]
+async fn git_worktree_diff(root: String) -> Result<gitops::WorktreeDiff, String> {
+    gitops::git_worktree_diff(&root)
+}
+
+#[tauri::command]
+async fn git_commit_diff(root: String, sha: String) -> Result<gitops::CommitDetail, String> {
+    gitops::git_commit_diff(&root, &sha)
+}
+
+#[tauri::command]
 async fn secrets_status() -> Result<secrets::SecretsStatus, String> {
     secrets::secrets_status()
 }
@@ -270,6 +285,9 @@ pub fn run() {
             git_init,
             git_commit,
             git_log,
+            git_status,
+            git_worktree_diff,
+            git_commit_diff,
             secrets_status,
             secrets_list,
             secret_set,

@@ -29,10 +29,60 @@ pub struct CommitResult {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Commit {
+    /// Full SHA — the handle used to fetch this commit's diff.
+    sha: String,
     short: String,
     message: String,
     author: String,
+    /// ISO-8601 author date (for an absolute-date tooltip).
+    iso_date: String,
     relative_date: String,
+}
+
+/// One entry in the working tree's change set (a `git status` line).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileChange {
+    /// Path relative to the repo root (the new path for a rename).
+    path: String,
+    /// The previous path for a rename/copy.
+    orig_path: Option<String>,
+    /// added | modified | deleted | renamed | copied | untracked | typechange | unmerged
+    kind: String,
+    /// Recorded in the index (staged for the next commit).
+    staged: bool,
+    /// Differs in the working tree beyond what's staged.
+    unstaged: bool,
+}
+
+/// The working tree's uncommitted state: a per-file summary plus one unified
+/// diff covering every change (tracked edits vs HEAD + synthesized adds for
+/// untracked files), so the UI can render the whole thing or slice it per file.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeDiff {
+    files: Vec<FileChange>,
+    /// Concatenated unified diff text (empty when the tree is clean).
+    diff: String,
+    /// The diff hit the size cap and was cut short.
+    truncated: bool,
+}
+
+/// A single commit's metadata and its full unified diff (vs its first parent;
+/// the root commit diffs against the empty tree).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitDetail {
+    sha: String,
+    short: String,
+    subject: String,
+    body: String,
+    author: String,
+    email: String,
+    iso_date: String,
+    relative_date: String,
+    diff: String,
+    truncated: bool,
 }
 
 fn git(root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
@@ -147,7 +197,7 @@ pub fn git_log(root: &str, limit: usize) -> Result<Vec<Commit>, String> {
     let root_path = PathBuf::from(root);
     let n = limit.clamp(1, 200).to_string();
     // Unit-separator (0x1f) between fields; newline between commits.
-    let out = git(&root_path, &["log", "-n", &n, "--pretty=%h%x1f%s%x1f%an%x1f%ar"])?;
+    let out = git(&root_path, &["log", "-n", &n, "--pretty=%H%x1f%h%x1f%s%x1f%an%x1f%aI%x1f%ar"])?;
     if !out.status.success() {
         return Ok(vec![]); // not a repo yet / no commits
     }
@@ -155,21 +205,232 @@ pub fn git_log(root: &str, limit: usize) -> Result<Vec<Commit>, String> {
     let mut commits = Vec::new();
     for line in text.lines() {
         let parts: Vec<&str> = line.split('\u{1f}').collect();
-        if parts.len() == 4 {
+        if parts.len() == 6 {
             commits.push(Commit {
-                short: parts[0].to_string(),
-                message: parts[1].to_string(),
-                author: parts[2].to_string(),
-                relative_date: parts[3].to_string(),
+                sha: parts[0].to_string(),
+                short: parts[1].to_string(),
+                message: parts[2].to_string(),
+                author: parts[3].to_string(),
+                iso_date: parts[4].to_string(),
+                relative_date: parts[5].to_string(),
             });
         }
     }
     Ok(commits)
 }
 
+/// Largest diff we ship to the UI. Skill repos are small; this only guards
+/// against a stray huge/binary blob blowing up the payload.
+const MAX_DIFF_BYTES: usize = 2_000_000;
+
+/// True for a string git can safely take as a revision: a hex SHA (full or
+/// abbreviated). Keeps caller-supplied values from being read as git options.
+fn is_hex_rev(rev: &str) -> bool {
+    let len = rev.len();
+    (4..=64).contains(&len) && rev.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Map a porcelain XY code to (kind, staged, unstaged).
+fn classify(code: &str) -> (&'static str, bool, bool) {
+    if code == "??" {
+        return ("untracked", false, true);
+    }
+    let x = code.chars().next().unwrap_or(' ');
+    let y = code.chars().nth(1).unwrap_or(' ');
+    let staged = x != ' ' && x != '?';
+    let unstaged = y != ' ' && y != '?';
+    let kind = if x == 'U' || y == 'U' || code == "AA" || code == "DD" {
+        "unmerged"
+    } else if x == 'R' || y == 'R' {
+        "renamed"
+    } else if x == 'C' || y == 'C' {
+        "copied"
+    } else if x == 'A' {
+        "added"
+    } else if x == 'D' || y == 'D' {
+        "deleted"
+    } else if x == 'T' || y == 'T' {
+        "typechange"
+    } else {
+        "modified"
+    };
+    (kind, staged, unstaged)
+}
+
+/// Parse `git status --porcelain=v1 -z -uall` into a change list. The `-z`
+/// stream is NUL-separated; a rename/copy entry is followed by its old path in
+/// the next field, so we walk the tokens with a cursor rather than line-split.
+fn parse_status(root: &Path) -> Vec<FileChange> {
+    let out = match git(root, &["status", "--porcelain=v1", "-z", "-uall"]) {
+        Ok(o) if o.status.success() => o.stdout,
+        _ => return vec![],
+    };
+    let text = String::from_utf8_lossy(&out);
+    let tokens: Vec<&str> = text.split('\0').filter(|t| !t.is_empty()).collect();
+    let mut files = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        let entry = tokens[i];
+        i += 1;
+        if entry.len() < 3 {
+            continue;
+        }
+        let code = &entry[..2];
+        let path = entry[3..].to_string(); // skip the single space after XY
+        let (kind, staged, unstaged) = classify(code);
+        let orig_path = if kind == "renamed" || kind == "copied" {
+            // The old path is the following NUL-separated token.
+            let p = tokens.get(i).map(|s| s.to_string());
+            i += 1;
+            p
+        } else {
+            None
+        };
+        files.push(FileChange { path, orig_path, kind: kind.to_string(), staged, unstaged });
+    }
+    files
+}
+
+pub fn git_status(root: &str) -> Result<Vec<FileChange>, String> {
+    if !git_available() {
+        return Ok(vec![]);
+    }
+    Ok(parse_status(&PathBuf::from(root)))
+}
+
+/// Append `text` to `buf`, stopping once `buf` reaches `cap` bytes; returns true
+/// if `text` was cut short.
+fn push_capped(buf: &mut String, text: &str, cap: usize) -> bool {
+    let room = cap.saturating_sub(buf.len());
+    if text.len() <= room {
+        buf.push_str(text);
+        false
+    } else {
+        // Back off to a UTF-8 char boundary — slicing mid-character panics.
+        let mut end = room;
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        buf.push_str(&text[..end]);
+        true
+    }
+}
+
+pub fn git_worktree_diff(root: &str) -> Result<WorktreeDiff, String> {
+    if !git_available() {
+        return Err("Git isn't installed.".into());
+    }
+    let root_path = PathBuf::from(root);
+    let files = parse_status(&root_path);
+
+    let mut diff = String::new();
+    let mut truncated = false;
+
+    // Tracked edits vs the last commit (covers staged + unstaged). Skipped when
+    // there are no commits yet (unborn HEAD) — those files show up as untracked.
+    if git_ok(&root_path, &["rev-parse", "--verify", "HEAD"]).is_some() {
+        // -M detects renames so a moved file reads as a rename (matching the
+        // per-commit diff from `git show`) rather than a delete + add pair.
+        if let Ok(out) = git(&root_path, &["-c", "core.quotepath=false", "diff", "--no-color", "-M", "HEAD"]) {
+            if out.status.success() {
+                truncated |= push_capped(&mut diff, &String::from_utf8_lossy(&out.stdout), MAX_DIFF_BYTES);
+            }
+        }
+    }
+
+    // Untracked files have no HEAD blob to diff against; `--no-index` against
+    // /dev/null renders them as clean "new file" additions (exit 1 == differs).
+    // The leading `--` stops a dash-prefixed filename being read as an option;
+    // quotepath=false keeps unicode/space paths literal (matching the tracked half).
+    for f in files.iter().filter(|f| f.kind == "untracked") {
+        if truncated {
+            break;
+        }
+        if let Ok(out) = git(
+            &root_path,
+            &["-c", "core.quotepath=false", "diff", "--no-index", "--no-color", "--", "/dev/null", &f.path],
+        ) {
+            let code = out.status.code().unwrap_or(-1);
+            if code == 0 || code == 1 {
+                // A binary file with no NUL in its leading bytes comes back as raw
+                // bytes; emit a synthetic new-file header instead of lossy junk.
+                let chunk = match std::str::from_utf8(&out.stdout) {
+                    Ok(s) => s.to_string(),
+                    Err(_) => format!("diff --git a/{p} b/{p}\nnew file mode 100644\n--- /dev/null\n+++ b/{p}\n", p = f.path),
+                };
+                truncated |= push_capped(&mut diff, &chunk, MAX_DIFF_BYTES);
+            }
+        }
+    }
+
+    Ok(WorktreeDiff { files, diff, truncated })
+}
+
+pub fn git_commit_diff(root: &str, sha: &str) -> Result<CommitDetail, String> {
+    if !git_available() {
+        return Err("Git isn't installed.".into());
+    }
+    if !is_hex_rev(sha) {
+        return Err("Invalid commit reference.".into());
+    }
+    let root_path = PathBuf::from(root);
+
+    // Metadata in one shot: SHA, short, subject, body, author, email, dates.
+    let meta = git(
+        &root_path,
+        &["show", "-s", "--format=%H%x1f%h%x1f%s%x1f%b%x1f%an%x1f%ae%x1f%aI%x1f%ar", sha],
+    )?;
+    if !meta.status.success() {
+        return Err(String::from_utf8_lossy(&meta.stderr).trim().to_string());
+    }
+    let meta_text = String::from_utf8_lossy(&meta.stdout);
+    let p: Vec<&str> = meta_text.trim_end_matches('\n').split('\u{1f}').collect();
+    if p.len() < 8 {
+        return Err("Couldn't read that commit.".into());
+    }
+
+    // The patch on its own. Empty --format suppresses the commit header so we
+    // get just the diff; --root makes the first commit diff against nothing.
+    let patch = git(&root_path, &["show", "--no-color", "--format=", "--patch", "--root", sha])?;
+    if !patch.status.success() {
+        return Err(String::from_utf8_lossy(&patch.stderr).trim().to_string());
+    }
+    let mut diff = String::new();
+    let truncated = push_capped(&mut diff, String::from_utf8_lossy(&patch.stdout).trim_start_matches('\n'), MAX_DIFF_BYTES);
+
+    Ok(CommitDetail {
+        sha: p[0].to_string(),
+        short: p[1].to_string(),
+        subject: p[2].to_string(),
+        body: p[3].trim().to_string(),
+        author: p[4].to_string(),
+        email: p[5].to_string(),
+        iso_date: p[6].to_string(),
+        relative_date: p[7].to_string(),
+        diff,
+        truncated,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn push_capped_respects_utf8_boundaries() {
+        // "é" is two bytes (0xC3 0xA9). A cap of 1 must NOT slice mid-character.
+        let mut buf = String::new();
+        let cut = push_capped(&mut buf, "é", 1);
+        assert!(cut && buf.is_empty()); // dropped the whole char rather than panic
+
+        let mut buf = String::from("ab");
+        let cut = push_capped(&mut buf, "cd", 10);
+        assert!(!cut && buf == "abcd"); // fits, no truncation
+
+        let mut buf = String::new();
+        let cut = push_capped(&mut buf, "aé", 2);
+        assert!(cut && buf == "a"); // keeps the ascii byte, drops the split char
+    }
 
     #[test]
     fn round_trip_when_git_present() {
@@ -199,6 +460,34 @@ mod tests {
 
         // Nothing-to-commit path.
         assert!(git_commit(&root, "again").is_err());
+
+        let sha = log[0].sha.clone();
+        assert_eq!(sha.len(), 40);
+
+        // Commit diff: the initial commit adds SKILL.md against the empty tree.
+        let detail = git_commit_diff(&root, &sha).unwrap();
+        assert_eq!(detail.subject, "initial version");
+        assert!(detail.diff.contains("new file"));
+        assert!(detail.diff.contains("SKILL.md"));
+        // A bogus / non-hex ref is rejected before reaching git.
+        assert!(git_commit_diff(&root, "not-a-sha!!").is_err());
+
+        // Working tree: edit a tracked file + add untracked ones (incl. a name
+        // beginning with '-', which must not be parsed by git as an option).
+        std::fs::write(base.join("SKILL.md"), "---\nname: t\n---\nhi there").unwrap();
+        std::fs::write(base.join("NOTES.md"), "fresh\n").unwrap();
+        std::fs::write(base.join("-dash.md"), "dashed\n").unwrap();
+        let wt = git_worktree_diff(&root).unwrap();
+        let kinds: Vec<(&str, &str)> =
+            wt.files.iter().map(|f| (f.path.as_str(), f.kind.as_str())).collect();
+        assert!(kinds.contains(&("SKILL.md", "modified")));
+        assert!(kinds.contains(&("NOTES.md", "untracked")));
+        // The diff carries the tracked edit and every untracked add, including
+        // the dash-prefixed file (would be dropped without the `--` separator).
+        assert!(wt.diff.contains("+hi there"));
+        assert!(wt.diff.contains("NOTES.md") && wt.diff.contains("+fresh"));
+        assert!(wt.diff.contains("-dash.md") && wt.diff.contains("+dashed"));
+        assert!(!wt.truncated);
 
         let _ = std::fs::remove_dir_all(&base);
     }

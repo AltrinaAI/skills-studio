@@ -210,6 +210,9 @@ fn handle(method: &Method, url: &str, body: &str, dist: &Path) -> Reply {
             let limit = v.get("limit").and_then(|x| x.as_u64()).unwrap_or(20) as usize;
             json_reply(gitops::git_log(&s("root"), limit))
         }
+        (Method::Post, "/api/git-status") => json_reply(gitops::git_status(&s("root"))),
+        (Method::Post, "/api/git-worktree-diff") => json_reply(gitops::git_worktree_diff(&s("root"))),
+        (Method::Post, "/api/git-commit-diff") => json_reply(gitops::git_commit_diff(&s("root"), &s("sha"))),
         (Method::Get, "/api/secrets-status") => json_reply(secrets::secrets_status()),
         (Method::Get, "/api/secrets-list") => json_reply(secrets::secrets_list()),
         (Method::Post, "/api/secret-set") => {

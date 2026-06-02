@@ -33,8 +33,19 @@ function PreviewBadge() {
 }
 
 // ---- Version (git) ----------------------------------------------------------
-function VersionSection({ root, dirName, kind }: { root: string; dirName: string; kind: SkillKind }) {
+function VersionSection({
+  root,
+  dirName,
+  kind,
+  onViewHistory,
+}: {
+  root: string;
+  dirName: string;
+  kind: SkillKind;
+  onViewHistory: () => void;
+}) {
   const [info, setInfo] = useState<GitInfo | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [log, setLog] = useState<GitCommit[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -42,9 +53,16 @@ function VersionSection({ root, dirName, kind }: { root: string; dirName: string
   const [message, setMessage] = useState("");
 
   const refresh = useCallback(async () => {
-    const i = await api.gitInfo(root).catch(() => null);
-    setInfo(i);
-    setLog(i?.isRepo ? await api.gitLog(root, 20).catch(() => []) : []);
+    setErr(null);
+    try {
+      const i = await api.gitInfo(root);
+      setInfo(i);
+      setLog(i.isRepo ? await api.gitLog(root, 20).catch(() => []) : []);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Failed to load version info");
+    } finally {
+      setLoaded(true);
+    }
   }, [root]);
   useEffect(() => {
     void refresh();
@@ -82,12 +100,15 @@ function VersionSection({ root, dirName, kind }: { root: string; dirName: string
     }
   };
 
-  if (info === null) {
+  if (!loaded) {
     return (
       <p className="flex items-center gap-2 text-sm text-muted">
         <Spinner className="h-3.5 w-3.5" /> Checking version control…
       </p>
     );
+  }
+  if (!info) {
+    return <p className="text-sm text-danger">{err ?? "Couldn’t load version control."}</p>;
   }
   if (!info.available) {
     return <p className="text-sm text-muted">Git isn’t installed — install git to enable version history.</p>;
@@ -174,8 +195,8 @@ function VersionSection({ root, dirName, kind }: { root: string; dirName: string
 
           {log.length > 0 && (
             <ul className="space-y-0 overflow-hidden rounded-lg border border-border">
-              {log.map((c, i) => (
-                <li key={c.short + i} className="flex items-baseline gap-2 border-t border-border px-2.5 py-1.5 text-xs first:border-t-0">
+              {log.slice(0, 5).map((c) => (
+                <li key={c.sha} className="flex items-baseline gap-2 border-t border-border px-2.5 py-1.5 text-xs first:border-t-0">
                   <code className="shrink-0 font-mono text-faint">{c.short}</code>
                   <span className="min-w-0 flex-1 truncate text-fg" title={c.message}>
                     {c.message}
@@ -185,6 +206,17 @@ function VersionSection({ root, dirName, kind }: { root: string; dirName: string
               ))}
             </ul>
           )}
+
+          <button
+            type="button"
+            onClick={onViewHistory}
+            className="flex items-center gap-1 text-xs font-medium text-accent hover:underline"
+          >
+            View full history &amp; diffs
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M5 12h14M13 6l6 6-6 6" />
+            </svg>
+          </button>
         </>
       )}
       {err && <p className="text-xs text-danger">{err}</p>}
@@ -381,12 +413,15 @@ export default function ManagePanel({
   dirName,
   kind,
   onClose,
+  onViewHistory,
   onDeleted,
 }: {
   root: string;
   dirName: string;
   kind: SkillKind;
   onClose: () => void;
+  /** Open the full git history & diffs view (closes this drawer). */
+  onViewHistory: () => void;
   /** Called after the skill folder is deleted, so the host can navigate away. */
   onDeleted: () => void;
 }) {
@@ -412,7 +447,7 @@ export default function ManagePanel({
 
         <div className="min-h-0 flex-1 overflow-auto">
           <Section title="Version">
-            <VersionSection root={root} dirName={dirName} kind={kind} />
+            <VersionSection root={root} dirName={dirName} kind={kind} onViewHistory={onViewHistory} />
           </Section>
           <Section title="Secrets">
             <SecretsManager />

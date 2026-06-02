@@ -395,3 +395,77 @@ body {
   white-space: pre-wrap;
   overflow-wrap: break-word;
 }
+
+/* ---------------------------------------------------------------------- */
+/* Unified diff rendering (git history & working-tree changes)            */
+/* ---------------------------------------------------------------------- */
+/* Add/delete tints derive from the shared --ok / --error tokens via
+   color-mix, so they track the light/dark theme like the Badge tones. */
+/* Auto layout (NOT fixed): the hunk-header row spans all columns, so fixed
+   layout can't derive column widths. Instead the gutters shrink to their digits
+   (width:1% + nowrap) and the code cell claims the rest (width:100%). */
+.diff {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.55;
+  width: 100%;
+  border-collapse: collapse;
+}
+.diff td {
+  vertical-align: top;
+}
+/* The two line-number gutters: collapse to content, right-aligned, unselectable. */
+.diff-gutter {
+  width: 1%;
+  padding: 0 0.5em;
+  text-align: right;
+  color: var(--faint);
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  user-select: none;
+  white-space: nowrap;
+}
+/* The code column takes all remaining width and wraps long lines. */
+.diff-code {
+  width: 100%;
+  padding: 0 0.7em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 2;
+}
+.diff-hunk td {
+  padding: 0.15em 0.6em;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.diff-add .diff-code {
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+}
+.diff-add .diff-gutter {
+  background: color-mix(in srgb, var(--ok) 22%, transparent);
+  color: color-mix(in srgb, var(--ok) 75%, var(--fg));
+  border-right-color: color-mix(in srgb, var(--ok) 30%, transparent);
+}
+.diff-del .diff-code {
+  background: color-mix(in srgb, var(--error) 13%, transparent);
+}
+.diff-del .diff-gutter {
+  background: color-mix(in srgb, var(--error) 22%, transparent);
+  color: color-mix(in srgb, var(--error) 75%, var(--fg));
+  border-right-color: color-mix(in srgb, var(--error) 30%, transparent);
+}
+/* The leading +/-/space marker column inside the code cell. */
+.diff-marker {
+  display: inline-block;
+  width: 1ch;
+  color: var(--faint);
+  user-select: none;
+}
+.diff-add .diff-marker {
+  color: color-mix(in srgb, var(--ok) 80%, var(--fg));
+}
+.diff-del .diff-marker {
+  color: color-mix(in srgb, var(--error) 80%, var(--fg));
+}

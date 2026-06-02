@@ -308,10 +308,48 @@ export interface GitInfo {
   hasIdentity: boolean;
 }
 export interface GitCommit {
+  /** Full SHA — the handle for fetching this commit's diff. */
+  sha: string;
   short: string;
   message: string;
   author: string;
+  /** ISO-8601 author date (for an absolute-date tooltip). */
+  isoDate: string;
   relativeDate: string;
+}
+/** One uncommitted change in the working tree (a `git status` entry). */
+export interface GitFileChange {
+  /** Path relative to the skill root (new path for a rename). */
+  path: string;
+  /** Previous path for a rename/copy. */
+  origPath?: string;
+  /** added | modified | deleted | renamed | copied | untracked | typechange | unmerged */
+  kind: string;
+  /** Recorded in the index. */
+  staged: boolean;
+  /** Differs in the working tree beyond what's staged. */
+  unstaged: boolean;
+}
+/** The working tree's uncommitted state: per-file summary + one unified diff. */
+export interface GitWorktreeDiff {
+  files: GitFileChange[];
+  /** Unified diff text covering every change (empty when clean). */
+  diff: string;
+  /** The diff hit the size cap and was cut short. */
+  truncated: boolean;
+}
+/** A single commit's metadata plus its full unified diff. */
+export interface GitCommitDetail {
+  sha: string;
+  short: string;
+  subject: string;
+  body: string;
+  author: string;
+  email: string;
+  isoDate: string;
+  relativeDate: string;
+  diff: string;
+  truncated: boolean;
 }
 export const gitInfo = (root: string) =>
   isTauri ? invoke<GitInfo>("git_info", { root }) : http<GitInfo>("POST", "git-info", { root });
@@ -323,6 +361,16 @@ export const gitCommit = (root: string, message: string) =>
     : http<{ sha: string; summary: string }>("POST", "git-commit", { root, message });
 export const gitLog = (root: string, limit = 20) =>
   isTauri ? invoke<GitCommit[]>("git_log", { root, limit }) : http<GitCommit[]>("POST", "git-log", { root, limit });
+export const gitStatus = (root: string) =>
+  isTauri ? invoke<GitFileChange[]>("git_status", { root }) : http<GitFileChange[]>("POST", "git-status", { root });
+export const gitWorktreeDiff = (root: string) =>
+  isTauri
+    ? invoke<GitWorktreeDiff>("git_worktree_diff", { root })
+    : http<GitWorktreeDiff>("POST", "git-worktree-diff", { root });
+export const gitCommitDiff = (root: string, sha: string) =>
+  isTauri
+    ? invoke<GitCommitDetail>("git_commit_diff", { root, sha })
+    : http<GitCommitDetail>("POST", "git-commit-diff", { root, sha });
 
 // --- secret manager (machine-local env vars for skills) ---
 export interface SecretEntry {

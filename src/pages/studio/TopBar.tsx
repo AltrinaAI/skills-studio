@@ -42,6 +42,8 @@ export default function TopBar({
   onHome,
   skillName,
   selected,
+  historyActive,
+  onHistory,
   onManage,
   onExport,
   toggleTheme,
@@ -49,6 +51,8 @@ export default function TopBar({
   onHome: () => void;
   skillName: string;
   selected: string | null;
+  historyActive: boolean;
+  onHistory: () => void;
   onManage: () => void;
   onExport: () => void;
   toggleTheme: () => void;
@@ -74,6 +78,22 @@ export default function TopBar({
       }
     >
       <SaveButton />
+      <button
+        type="button"
+        onClick={onHistory}
+        title="Git history, diffs & uncommitted changes"
+        aria-pressed={historyActive}
+        className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs hover:bg-panel hover:text-fg ${
+          historyActive ? "bg-panel text-fg" : "text-muted"
+        }`}
+      >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+          <path d="M3 3v5h5" />
+          <path d="M12 7v5l3 2" />
+        </svg>
+        <span className="hidden sm:inline">History</span>
+      </button>
       <button
         type="button"
         onClick={onManage}

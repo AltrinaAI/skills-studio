@@ -27,6 +27,7 @@ export const router = createHashRouter([
         children: [
           { index: true, lazy: () => import("@/pages/studio/StudioIndexRoute") },
           { path: "file/*", lazy: () => import("@/pages/studio/StudioFileRoute") },
+          { path: "history", lazy: () => import("@/pages/studio/StudioHistoryRoute") },
         ],
       },
       { path: "*", element: <Navigate to="/" replace /> },

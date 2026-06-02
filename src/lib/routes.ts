@@ -11,3 +11,6 @@ export const studioPath = (root: string) => `/studio/${encodeURIComponent(root)}
 
 export const studioFilePath = (root: string, rel: string) =>
   `${studioPath(root)}/file/${rel.split("/").map(encodeURIComponent).join("/")}`;
+
+/** The skill's git history & diffs view (commits + working-tree changes). */
+export const studioHistoryPath = (root: string) => `${studioPath(root)}/history`;
