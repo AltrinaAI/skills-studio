@@ -167,7 +167,7 @@ function PropRow({ label, children }: { label: string; children: React.ReactNode
   );
 }
 
-export default function SkillDocument({ data }: { data: SkillData }) {
+export default function SkillDocument({ data, onSaved }: { data: SkillData; onSaved?: () => void }) {
   const fm = data.frontmatter;
   const [name, setName] = useState(asString(fm.name));
   const [description, setDescription] = useState(asString(fm.description));
@@ -196,7 +196,7 @@ export default function SkillDocument({ data }: { data: SkillData }) {
   const save = useCallback(async () => {
     await api.saveSkillMd(data.root, frontmatter, body);
   }, [data.root, frontmatter, body]);
-  useManualSave(serialized, save);
+  useManualSave(serialized, save, true, onSaved);
 
   const dupKeys = useMemo(() => {
     const trimmed = meta.map((r) => r.key.trim());

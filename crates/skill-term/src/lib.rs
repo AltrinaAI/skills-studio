@@ -282,6 +282,7 @@ pub fn create_session(
     rows: u16,
     ide: bool,
     skip_permissions: bool,
+    auto_mode: bool,
     extra_args: &[String],
 ) -> Result<SessionInfo, String> {
     let opt = detect_agents()
@@ -316,7 +317,12 @@ pub fn create_session(
             if ide {
                 argv.push("--ide".into());
             }
-            if skip_permissions {
+            // Auto mode and skip-permissions are mutually exclusive (the flags
+            // conflict); the UI enforces this, but prefer auto if both arrive.
+            if auto_mode {
+                argv.push("--permission-mode".into());
+                argv.push("auto".into());
+            } else if skip_permissions {
                 argv.push("--dangerously-skip-permissions".into());
             }
         }
@@ -808,7 +814,7 @@ mod tests {
             return;
         }
         let cwd = std::env::temp_dir().to_string_lossy().into_owned();
-        let s = create_session("shell", &cwd, 100, 30, false, false, &[]).expect("create");
+        let s = create_session("shell", &cwd, 100, 30, false, false, false, &[]).expect("create");
         let (att, rx) = attach(&s.id, 100, 30).expect("attach");
         std::thread::sleep(std::time::Duration::from_millis(600)); // let the shell start
         write(&s.id, b"echo HELLO_RT\n").expect("write");
@@ -839,7 +845,7 @@ mod tests {
             return;
         }
         let cwd = std::env::temp_dir().to_string_lossy().into_owned();
-        let s = create_session("shell", &cwd, 80, 24, false, false, &[]).expect("create");
+        let s = create_session("shell", &cwd, 80, 24, false, false, false, &[]).expect("create");
         assert!(s.id.starts_with(PREFIX));
         assert!(session_exists(&s.id), "session should exist after create");
         let listed = list_sessions().unwrap();
@@ -863,7 +869,7 @@ mod tests {
             return;
         }
         let cwd = std::env::temp_dir().to_string_lossy().into_owned();
-        let s = create_session("shell", &cwd, 80, 24, false, false, &[]).expect("create");
+        let s = create_session("shell", &cwd, 80, 24, false, false, false, &[]).expect("create");
         assert!(session_exists(&s.id));
         // Owner pid stays our (live) pid, but corrupt the recorded start-time to
         // mimic a pid that was reused by a different process → sweep must reap.

@@ -9,7 +9,7 @@ import type { FileData } from "@/lib/types";
 const LiveEditor = lazy(() => import("./LiveEditor"));
 const EditorFallback = () => <div className="px-8 py-6 text-sm text-muted">Loading editor…</div>;
 
-export default function FilePane({ root, file }: { root: string; file: FileData }) {
+export default function FilePane({ root, file, onSaved }: { root: string; file: FileData; onSaved?: () => void }) {
   const editable = file.content != null && !file.tooLarge && !file.isBinary && file.category !== "image";
   const [content, setContent] = useState(file.content ?? "");
   const baseName = file.rel.split("/").pop() ?? file.rel;
@@ -32,7 +32,7 @@ export default function FilePane({ root, file }: { root: string; file: FileData 
     await api.writeFile(root, file.rel, content);
   }, [root, file.rel, content]);
 
-  useManualSave(content, save, editable);
+  useManualSave(content, save, editable, onSaved);
 
   return (
     <div className="mx-auto max-w-208 px-6 py-8 sm:px-10">

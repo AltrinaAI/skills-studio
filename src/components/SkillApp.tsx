@@ -11,9 +11,10 @@ import ManagePanel from "./ManagePanel";
 import ExportDialog from "./ExportDialog";
 import { Spinner } from "./ui";
 import { addRecent } from "./recents";
-import { confirmDiscardIfDirty } from "./editorState";
-import { agentForPath, skillKind } from "@/lib/agents";
-import { requiredEnv, withRequiredEnv } from "@/lib/skill";
+import { confirmDiscardIfDirty, isEditorDirty } from "./editorState";
+import { reconcileRequiredEnv, runSaveHooks } from "./saveHooks";
+import { skillKind } from "@/lib/agents";
+import { requiredEnv } from "@/lib/skill";
 import * as api from "@/lib/api";
 import type { SkillData, FileData } from "@/lib/types";
 
@@ -41,10 +42,16 @@ export default function SkillApp({
   const [manageOpen, setManageOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [terminalsOpen, setTerminalsOpen] = useState(false);
-  // Bumped when we replace `data` for the *same* root (e.g. after a re-scan
+  // Bumped when we replace `data` for the *same* root (e.g. a post-save hook
   // rewrites SKILL.md) so the mount-initialized editor remounts with it.
   const [docVersion, setDocVersion] = useState(0);
   const reqRef = useRef(0);
+  // Live `data` for async callbacks (post-save hooks) that resolve after the
+  // user may have navigated elsewhere.
+  const dataRef = useRef(data);
+  useEffect(() => {
+    dataRef.current = data;
+  });
 
   const toggleTheme = useCallback(() => {
     const isDark = document.documentElement.classList.toggle("dark");
@@ -52,38 +59,6 @@ export default function SkillApp({
       localStorage.setItem("skillviewer-theme", isDark ? "dark" : "light");
     } catch {}
   }, []);
-
-  // Auto-declare the env vars a skill references: scan its files for managed
-  // secret names and fold any new ones into `metadata.required-env`. Additive
-  // (never drops a manual entry) and only for our own skills — we own that
-  // field, but don't rewrite official/plugin skills. Returns the (possibly
-  // reloaded) data plus the referenced names; cancelled=true if a dirty-edit
-  // discard prompt was declined.
-  const reconcileRequiredEnv = useCallback(
-    async (
-      sd: SkillData,
-      guardDirty = false,
-    ): Promise<{ data: SkillData; found: string[]; cancelled?: boolean }> => {
-      if (skillKind(sd.root).kind !== "personal") return { data: sd, found: [] };
-      let found: string[] = [];
-      try {
-        found = await api.detectRequiredEnv(sd.root);
-      } catch {
-        return { data: sd, found: [] };
-      }
-      const current = requiredEnv(sd.frontmatter);
-      const merged = Array.from(new Set([...current, ...found])).sort();
-      if (merged.length === current.length) return { data: sd, found }; // nothing new
-      if (guardDirty && !confirmDiscardIfDirty()) return { data: sd, found, cancelled: true };
-      try {
-        await api.saveSkillMd(sd.root, withRequiredEnv(sd.frontmatter, merged), sd.body);
-        return { data: await api.loadSkill(sd.root), found };
-      } catch {
-        return { data: sd, found };
-      }
-    },
-    [],
-  );
 
   // Record a deep-linked / SSR-loaded skill in recents once. (Auto-declare runs
   // in the load path below; SSR-provided `initialData` isn't used in this app,
@@ -98,8 +73,8 @@ export default function SkillApp({
     setLoading(true);
     setLoadError(null);
     try {
-      const loaded = await api.loadSkill(p);
-      const sd = (await reconcileRequiredEnv(loaded)).data;
+      // Reconcile required-env on open so the declaration is current before edits.
+      const { data: sd } = await reconcileRequiredEnv(p);
       setData(sd);
       setSelected("SKILL.md");
       setFileData(null);
@@ -110,7 +85,7 @@ export default function SkillApp({
     } finally {
       setLoading(false);
     }
-  }, [reconcileRequiredEnv]);
+  }, []);
 
   // Open a deep-linked skill (?path=) once on mount.
   useEffect(() => {
@@ -137,19 +112,29 @@ export default function SkillApp({
     setLoadError(null);
   }, []);
 
-  // Manual re-scan (e.g. after adding a secret to the store mid-session). May
-  // rewrite + reload SKILL.md; bump docVersion so the already-mounted editor
-  // remounts with the new declaration. null = cancelled the discard prompt.
-  const detectEnv = useCallback(async (): Promise<string[] | null> => {
-    if (!data) return [];
-    const { data: fresh, found, cancelled } = await reconcileRequiredEnv(data, true);
-    if (cancelled) return null;
-    if (fresh !== data) {
-      setData(fresh);
-      setDocVersion((v) => v + 1);
+  // Runs after every successful save: fire the post-save pipeline (today, the
+  // managed-secret → required-env scan). If a hook rewrote + reloaded the skill,
+  // swap the fresh data in — but only when we're still on the same skill, and
+  // remount the editor (docVersion bump) only when it isn't mid-edit, so we
+  // never discard keystrokes typed in the window after the save. (When the
+  // editor IS mid-edit we keep its buffer and skip the remount; the on-disk
+  // required-env may briefly trail the editor, but the next save re-detects and
+  // re-adds it — the scan reads the files, which still hold the reference.)
+  // `saveSeq` drops a stale reconcile if a newer save started before it resolved.
+  const saveSeq = useRef(0);
+  const afterSave = useCallback(async () => {
+    if (!data) return;
+    const seq = ++saveSeq.current;
+    const rel = selected === "SKILL.md" ? null : selected;
+    const effects = await runSaveHooks({ root: data.root, kind: skillKind(data.root).kind, rel });
+    if (seq !== saveSeq.current) return; // a newer save superseded this one
+    let reloaded: SkillData | undefined;
+    for (const e of effects) if (e.reloaded) reloaded = e.reloaded;
+    if (reloaded && dataRef.current?.root === reloaded.root) {
+      setData(reloaded);
+      if (!isEditorDirty()) setDocVersion((v) => v + 1);
     }
-    return found;
-  }, [data, reconcileRequiredEnv]);
+  }, [data, selected]);
 
   // Skills with no declared env can export in one click; otherwise the dialog
   // surfaces the bundle-secrets option and the not-bundled warning.
@@ -217,7 +202,7 @@ export default function SkillApp({
         <Sidebar data={data} selected={selected} onSelect={selectFile} />
         <main className="min-w-0 flex-1 overflow-auto">
           {selected === "SKILL.md" ? (
-            <SkillDocument key={`${data.root}:${docVersion}`} data={data} />
+            <SkillDocument key={`${data.root}:${docVersion}`} data={data} onSaved={afterSave} />
           ) : fileLoading ? (
             <div role="status" aria-live="polite" className="flex h-full items-center justify-center text-muted">
               <Spinner /> <span className="ml-2">Loading file…</span>
@@ -225,7 +210,7 @@ export default function SkillApp({
           ) : fileError ? (
             <p className="px-8 py-8 text-sm text-danger">{fileError}</p>
           ) : fileData ? (
-            <FilePane key={fileData.rel} root={data.root} file={fileData} />
+            <FilePane key={fileData.rel} root={data.root} file={fileData} onSaved={afterSave} />
           ) : null}
         </main>
       </div>
@@ -234,9 +219,6 @@ export default function SkillApp({
           root={data.root}
           dirName={data.dirName}
           kind={skillKind(data.root).kind}
-          agent={agentForPath(data.root)}
-          declaredSecrets={requiredEnv(data.frontmatter)}
-          onDetectEnv={detectEnv}
           onClose={() => setManageOpen(false)}
           onDeleted={afterDelete}
         />

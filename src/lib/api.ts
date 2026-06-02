@@ -385,6 +385,9 @@ export interface CreateTermArgs {
   rows: number;
   ide: boolean;
   skipPermissions: boolean;
+  /** Claude only: start in auto mode (`--permission-mode auto`). Mutually
+   *  exclusive with skipPermissions. */
+  autoMode: boolean;
   extraArgs: string[];
 }
 

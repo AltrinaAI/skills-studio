@@ -186,9 +186,10 @@ fn terminal_create(
     rows: u16,
     ide: bool,
     skip_permissions: bool,
+    auto_mode: bool,
     extra_args: Vec<String>,
 ) -> Result<skill_term::SessionInfo, String> {
-    skill_term::create_session(&agent, &cwd, cols, rows, ide, skip_permissions, &extra_args)
+    skill_term::create_session(&agent, &cwd, cols, rows, ide, skip_permissions, auto_mode, &extra_args)
 }
 
 #[tauri::command]

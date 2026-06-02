@@ -66,6 +66,7 @@ export default function NewTerminalDialog({
   const [cwd, setCwd] = useState("");
   const [ide, setIde] = useState(false);
   const [skip, setSkip] = useState(false);
+  const [auto, setAuto] = useState(false);
   const [extra, setExtra] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -109,7 +110,8 @@ export default function NewTerminalDialog({
         cols: 80,
         rows: 24,
         ide: ide && selected.supportsIde,
-        skipPermissions: skip && selected.agent === "claude",
+        skipPermissions: skip && !auto && selected.agent === "claude",
+        autoMode: auto && selected.agent === "claude",
         extraArgs: tokenizeArgs(extra),
       });
       onCreated(s);
@@ -194,13 +196,38 @@ export default function NewTerminalDialog({
             </label>
           )}
           {selected?.agent === "claude" && (
-            <label className="flex items-center gap-2 text-sm text-fg">
-              <input type="checkbox" checked={skip} onChange={(e) => setSkip(e.target.checked)} className="accent-accent" />
-              Skip permission prompts
-              <span className="rounded-full bg-warn/15 px-1.5 py-0.5 text-[0.6rem] font-medium uppercase tracking-wide text-warn">
-                risky
-              </span>
-            </label>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm text-fg">
+                <input
+                  type="checkbox"
+                  checked={auto}
+                  onChange={(e) => {
+                    setAuto(e.target.checked);
+                    if (e.target.checked) setSkip(false);
+                  }}
+                  className="accent-accent"
+                />
+                Auto mode (<code className="font-mono text-[0.85em]">--permission-mode auto</code>)
+                <span className="rounded-full bg-accent/15 px-1.5 py-0.5 text-[0.6rem] font-medium uppercase tracking-wide text-accent">
+                  preview
+                </span>
+              </label>
+              <label className="flex items-center gap-2 text-sm text-fg">
+                <input
+                  type="checkbox"
+                  checked={skip}
+                  onChange={(e) => {
+                    setSkip(e.target.checked);
+                    if (e.target.checked) setAuto(false);
+                  }}
+                  className="accent-accent"
+                />
+                Skip permission prompts
+                <span className="rounded-full bg-warn/15 px-1.5 py-0.5 text-[0.6rem] font-medium uppercase tracking-wide text-warn">
+                  risky
+                </span>
+              </label>
+            </div>
           )}
 
           {selected && selected.agent !== "shell" && (

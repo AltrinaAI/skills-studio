@@ -11,11 +11,14 @@ export type SaveStatus = "saved" | "dirty" | "saving" | "error";
  *   the global Save button, or ⌘S / Ctrl-S.
  * - Tracks dirty/saving/error and publishes them to the shared editor store.
  * - Warns (beforeunload) if the tab is closed with unsaved changes.
+ * - `onSaved` fires after each successful save (fire-and-forget) — the hook the
+ *   host uses to run the post-save pipeline.
  */
 export function useManualSave(
   value: string,
   save: (value: string) => Promise<void>,
   enabled = true,
+  onSaved?: () => void,
 ) {
   const [savedValue, setSavedValue] = useState(value);
   const [saving, setSaving] = useState(false);
@@ -31,6 +34,7 @@ export function useManualSave(
   const dirtyRef = useRef(dirty);
   const enabledRef = useRef(enabled);
   const saveImplRef = useRef(save);
+  const onSavedRef = useRef(onSaved);
   useEffect(() => {
     valueRef.current = value;
     savedRef.current = savedValue;
@@ -38,6 +42,7 @@ export function useManualSave(
     dirtyRef.current = dirty;
     enabledRef.current = enabled;
     saveImplRef.current = save;
+    onSavedRef.current = onSaved;
   });
 
   const doSave = useCallback(() => {
@@ -49,6 +54,9 @@ export function useManualSave(
       .then(() => {
         setSavedValue(v);
         setError(null);
+        // Fire the post-save pipeline without blocking the save (it may reload
+        // the skill); a clean save means value === savedValue, so it's safe.
+        onSavedRef.current?.();
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Save failed"))
       .finally(() => setSaving(false));

@@ -13,24 +13,18 @@ const btnGhost =
 
 const mask = (v: string) => "•".repeat(Math.min(12, Math.max(4, v.length)));
 
-/** Global secret store UI. `declared` are the env vars the current skill asks
- *  for (from its SKILL.md `metadata.required-env`); only those the secret store
- *  actually holds are surfaced. `onDetect` scans the skill's files to (re)populate
- *  that declaration with the stored secrets it references. */
-export default function SecretsManager({
-  declared = [],
-  onDetect,
-}: {
-  declared?: string[];
-  onDetect?: () => Promise<string[] | null>;
-}) {
+/** Global secret store UI. The env vars a skill references are auto-detected and
+ *  folded into its `metadata.required-env` automatically — on save (the post-save
+ *  pipeline) and on open — so there's nothing to scan from here. Detection is
+ *  store-dependent, so adding a secret here refreshes a skill's required-env on
+ *  its next save or reopen, not instantly. */
+export default function SecretsManager() {
   const [status, setStatus] = useState<SecretsStatus | null>(null);
   const [secrets, setSecrets] = useState<SecretEntry[] | null>(null);
   const [reveal, setReveal] = useState<Set<string>>(new Set());
   const [newKey, setNewKey] = useState("");
   const [newValue, setNewValue] = useState("");
   const [busy, setBusy] = useState(false);
-  const [detecting, setDetecting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
@@ -97,23 +91,6 @@ export default function SecretsManager({
     }
   };
 
-  const runDetect = async () => {
-    if (!onDetect) return;
-    setDetecting(true);
-    setErr(null);
-    setNote(null);
-    try {
-      const found = await onDetect();
-      if (found === null) setNote("Save or discard your edits first, then re-scan.");
-      else if (found.length === 0) setNote("No stored secrets are referenced in this skill's files.");
-      else setNote(`References ${found.join(", ")}.`);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "Detection failed");
-    } finally {
-      setDetecting(false);
-    }
-  };
-
   if (secrets === null || status === null) {
     return (
       <p className="flex items-center gap-2 text-sm text-muted">
@@ -122,10 +99,6 @@ export default function SecretsManager({
     );
   }
 
-  const have = new Set(secrets.map((s) => s.key));
-  // Only surface declared vars the secret store actually holds — a skill's
-  // required-env can list prose or never-stored names we don't manage.
-  const referenced = declared.filter((k) => have.has(k));
   const installedAny = status.agents.some((a) => a.hasSkill);
 
   return (
@@ -135,20 +108,6 @@ export default function SecretsManager({
         <span className="font-mono text-[0.9em] text-fg">skill-studio</span> activation skill — never pasted into prompts
         or agent configs.
       </p>
-
-      {onDetect && (
-        <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-panel px-3 py-2">
-          <p className="text-[0.7rem] text-muted">
-            {referenced.length
-              ? `This skill references ${referenced.length} stored secret${referenced.length === 1 ? "" : "s"}.`
-              : "No stored secrets are referenced in this skill's files."}{" "}
-            Re-scan after adding new secrets to the store.
-          </p>
-          <button type="button" onClick={() => void runDetect()} disabled={detecting || busy} className={btnGhost}>
-            {detecting ? "Scanning…" : "Re-scan"}
-          </button>
-        </div>
-      )}
 
       <form
         onSubmit={(e) => {

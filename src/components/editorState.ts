@@ -68,6 +68,12 @@ export function confirmDiscardIfDirty(): boolean {
   return window.confirm("You have unsaved changes that will be lost. Continue without saving?");
 }
 
+/** Imperative read of whether the active editor has unsaved edits right now —
+ *  e.g. to avoid remounting it (and dropping keystrokes) during async work. */
+export function isEditorDirty(): boolean {
+  return status.dirty;
+}
+
 export function useEditorStatus(): EditorStatus {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

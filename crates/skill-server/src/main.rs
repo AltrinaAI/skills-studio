@@ -182,6 +182,7 @@ fn handle(method: &Method, url: &str, body: &str, dist: &Path) -> Reply {
                 u16f("rows", 24),
                 boolf("ide"),
                 boolf("skipPermissions"),
+                boolf("autoMode"),
                 &extra,
             ))
         }
