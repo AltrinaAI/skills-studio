@@ -446,6 +446,7 @@ pub fn chat(
     messages: &[ChatMessage],
     max_tokens: u32,
     temperature: f32,
+    seed: i64,
     response_format: Option<serde_json::Value>,
 ) -> Result<String, String> {
     let model = ensure_model()?;
@@ -462,8 +463,9 @@ pub fn chat(
         messages: &'a [ChatMessage],
         max_tokens: u32,
         temperature: f32,
-        /// Fixed seed so the same diff produces the same message (re-clicking
-        /// Generate no longer reshuffles the wording).
+        /// Sampling seed. A fixed seed (the auto/eager path) makes the same diff
+        /// produce the same message; a varying seed (the manual re-roll) gives a
+        /// fresh phrasing each click.
         seed: i64,
         stream: bool,
         /// Forwarded to the model's chat template. Qwen3/Qwen3.5 default thinking
@@ -479,7 +481,7 @@ pub fn chat(
         messages,
         max_tokens,
         temperature,
-        seed: 42,
+        seed,
         stream: false,
         chat_template_kwargs: serde_json::json!({ "enable_thinking": false }),
         response_format,

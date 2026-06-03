@@ -136,10 +136,18 @@ async fn git_log(root: String, limit: usize) -> Result<Vec<gitops::Commit>, Stri
 }
 
 /// Draft a commit message from the skill's uncommitted diff, on-device. The
-/// first call may download the model and warm up the local engine.
+/// first call may download the model and warm up the local engine. Reuses a
+/// cached draft when the diff is unchanged (the auto/eager path).
 #[tauri::command]
 async fn generate_commit_message(root: String) -> Result<String, String> {
     commitmsg::generate(&root)
+}
+
+/// Force a fresh draft (the manual ✨ Generate button) — ignores the cache and
+/// varies the seed so each click offers a different phrasing.
+#[tauri::command]
+async fn regenerate_commit_message(root: String) -> Result<String, String> {
+    commitmsg::regenerate(&root)
 }
 
 /// Whether the on-device model is downloaded yet (so the UI can warn about the
@@ -360,6 +368,7 @@ pub fn run() {
             git_commit,
             git_log,
             generate_commit_message,
+            regenerate_commit_message,
             commit_model_status,
             peek_commit_message,
             git_status,

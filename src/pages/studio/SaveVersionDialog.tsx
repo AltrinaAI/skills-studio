@@ -62,7 +62,9 @@ export default function SaveVersionDialog({
     setGenerating(true);
     setGenErr(null);
     try {
-      const msg = await api.generateCommitMessage(root);
+      // Auto/open path uses the cached deterministic draft; the manual button
+      // forces a fresh re-roll (new seed) so each click gives a different take.
+      const msg = auto ? await api.generateCommitMessage(root) : await api.regenerateCommitMessage(root);
       if (!auto || !userEdited.current) {
         setMessage(msg);
         requestAnimationFrame(() => taRef.current?.select());
@@ -169,10 +171,10 @@ export default function SaveVersionDialog({
             type="button"
             onClick={() => void generate()}
             disabled={saving || generating}
-            title="Draft a message from your changes with on-device AI"
-            className={btnGhost}
+            title="The message is drafted automatically — click for a different take (on-device AI)"
+            className="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-faint transition-colors hover:bg-panel hover:text-fg disabled:opacity-40"
           >
-            {generating ? "Generating…" : "✨ Generate"}
+            {generating ? "Generating…" : "✨ Regenerate"}
           </button>
           <div className="ml-auto flex gap-2">
             <button type="button" onClick={onClose} disabled={saving} className={btnGhost}>

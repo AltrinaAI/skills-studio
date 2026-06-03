@@ -207,6 +207,7 @@ fn handle(method: &Method, url: &str, body: &str, dist: &Path) -> Reply {
         (Method::Post, "/api/git-init") => json_reply(gitops::git_init(&s("root"))),
         (Method::Post, "/api/git-commit") => json_reply(gitops::git_commit(&s("root"), &s("message"))),
         (Method::Post, "/api/generate-commit-message") => json_reply(commitmsg::generate(&s("root"))),
+        (Method::Post, "/api/regenerate-commit-message") => json_reply(commitmsg::regenerate(&s("root"))),
         (Method::Post, "/api/peek-commit-message") => json_reply(commitmsg::peek(&s("root"))),
         (Method::Get, "/api/commit-model-status") => json_reply(Ok(engine::model_status())),
         (Method::Post, "/api/git-log") => {

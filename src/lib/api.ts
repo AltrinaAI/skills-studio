@@ -385,6 +385,12 @@ export const generateCommitMessage = (root: string) =>
   isTauri
     ? invoke<string>("generate_commit_message", { root })
     : http<string>("POST", "generate-commit-message", { root });
+/** Force a fresh draft (the manual ✨ Generate button): ignores the cache and
+ *  varies the seed, so each click offers a different phrasing. */
+export const regenerateCommitMessage = (root: string) =>
+  isTauri
+    ? invoke<string>("regenerate_commit_message", { root })
+    : http<string>("POST", "regenerate-commit-message", { root });
 export const commitModelStatus = () =>
   isTauri
     ? invoke<CommitModelStatus>("commit_model_status")

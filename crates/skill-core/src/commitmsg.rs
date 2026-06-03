@@ -32,22 +32,43 @@ pub fn generate(root: &str) -> Result<String, String> {
     if let Some(msg) = cached_for(root, hash) {
         return Ok(msg); // diff is byte-for-byte unchanged → reuse, no model run
     }
-    // Minimal prompt: analyse first, then commit. Structured output forces the
-    // model to reason in an `analysis` field BEFORE the `commit_message` (the
-    // schema's field order = generation order), which makes it actually read the
-    // diff instead of anchoring on the top — a big quality win for free.
-    //
-    // These are version notes for a skill author, NOT code commits: a plain
-    // one-line description of what changed, with no `feat:`/`fix:`/type prefix.
+    // Auto / eager path: a fixed seed + low temperature → deterministic, so the
+    // background draft and a repeat call agree.
+    run(root, &diff, hash, 42, 0.2)
+}
+
+/// Force a fresh draft, ignoring the cache. The manual ✨ Generate button calls
+/// this: each click should offer a genuinely different phrasing, so we vary the
+/// seed and raise the temperature (at the deterministic 0.2 + fixed seed a re-run
+/// just reproduces the cached message — clicking would appear to do nothing). The
+/// newest result replaces the cache, so the dialog/auto-populate reflect it.
+pub fn regenerate(root: &str) -> Result<String, String> {
+    let diff = gitops::worktree_diff_text(root)?;
+    if diff.trim().is_empty() {
+        return Err("No changes to describe — make some edits first.".into());
+    }
+    let hash = diff_hash(&diff);
+    run(root, &diff, hash, next_seed(), 0.7)
+}
+
+/// Shared generation core: minimal prompt (analyse first, then commit, via the
+/// structured `analysis`/`commit_message` schema) → model → parse → cache.
+///
+/// Structured output forces the model to reason in `analysis` BEFORE the
+/// `commit_message` (schema field order = generation order), which makes it
+/// actually read the diff instead of anchoring on the top. These are version
+/// notes for a skill author, NOT code commits: a plain one-line description with
+/// no `feat:`/`fix:`/type prefix.
+fn run(root: &str, diff: &str, hash: u64, seed: i64, temperature: f32) -> Result<String, String> {
     let prompt = format!(
         "Analyze the following git diff in no more than 100 words, then write a commit message. \
 The message must be one short, plain-English sentence describing what changed — with no \
 \"feat:\"/\"fix:\"/type prefix and no filename prefix, just the description.\n\nDiff:\n{}",
-        truncate_on_boundary(&diff, MAX_PROMPT_DIFF_BYTES)
+        truncate_on_boundary(diff, MAX_PROMPT_DIFF_BYTES)
     );
     let messages = vec![ChatMessage::new("user", prompt)];
 
-    let raw = engine::chat(&messages, 400, 0.2, Some(commit_schema()))?;
+    let raw = engine::chat(&messages, 400, temperature, seed, Some(commit_schema()))?;
     let msg = post_process(&extract_commit_message(&raw));
     debug_log(root, &messages, &raw, &msg);
     if msg.is_empty() {
@@ -55,6 +76,14 @@ The message must be one short, plain-English sentence describing what changed �
     }
     store_cached(root, hash, &msg);
     Ok(msg)
+}
+
+/// A new sampling seed for each manual re-roll, so repeated clicks vary. The
+/// fixed 42 used by the auto path stays separate.
+fn next_seed() -> i64 {
+    use std::sync::atomic::{AtomicI64, Ordering};
+    static SEED: AtomicI64 = AtomicI64::new(0);
+    1000 + SEED.fetch_add(1, Ordering::Relaxed)
 }
 
 /// Return the cached draft for `root` IF the working-tree diff is unchanged since
