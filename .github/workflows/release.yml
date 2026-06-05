@@ -10,6 +10,16 @@ jobs:
     # tauri-action creates the GitHub Release and uploads assets — needs write.
     permissions:
       contents: write
+    # Single source of truth for the llama.cpp build that BOTH the CPU engine and
+    # the CUDA bridge are pinned to (ggml backends are only ABI-compatible within
+    # one build) plus the CUDA arch set — referenced by the vendor steps and the
+    # bridge cache key so a tag/arch bump can never serve a stale, mismatched bridge.
+    env:
+      LLAMA_BUILD: b9486
+      # RTX 30/40/50 (Ampere/Ada/Blackwell). Datacenter (A100/H100) and pre-Ampere
+      # (RTX 20 / GTX 16) are omitted to keep the bridge ~128 MB — those fall back
+      # to CPU. Widen here if needed; the cache key includes this so it auto-rebuilds.
+      CUDA_ARCHS: "86;89;120"
     strategy:
       fail-fast: false
       matrix:
@@ -20,7 +30,7 @@ jobs:
           - platform: windows-latest
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install Linux dependencies
         if: startsWith(matrix.platform, 'ubuntu')
@@ -33,7 +43,7 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev patchelf
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -50,7 +60,7 @@ jobs:
 
       - name: Setup Java for Windows signing
         if: matrix.platform == 'windows-latest'
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
@@ -85,14 +95,13 @@ jobs:
       # per-runner before `tauri build` or the build aborts with
       # "resource path `binaries` doesn't exist". Pinned for reproducible releases.
       - name: Setup Python (engine vendor script)
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Vendor llama.cpp engine into src-tauri/binaries
         shell: bash
         env:
-          LLAMA_BUILD: b9486
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/fetch-engine.sh
 
@@ -110,13 +119,12 @@ jobs:
           path: |
             src-tauri/binaries/*/libggml-cuda.so
             src-tauri/binaries/*/ggml-cuda.dll
-          key: cuda-bridge-${{ matrix.platform }}-b9486-sm75to120
+          key: cuda-bridge-${{ matrix.platform }}-${{ env.LLAMA_BUILD }}-${{ env.CUDA_ARCHS }}
 
       - name: Vendor CUDA backend bridge
         if: (startsWith(matrix.platform, 'ubuntu') || matrix.platform == 'windows-latest') && steps.cuda-bridge.outputs.cache-hit != 'true'
         shell: bash
         env:
-          LLAMA_BUILD: b9486
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/fetch-cuda-backend.sh
 

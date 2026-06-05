@@ -56,15 +56,45 @@ fn backend_lib_name() -> Option<&'static str> {
     }
 }
 
-/// Is there an NVIDIA GPU? Shell out to `nvidia-smi -L` (present whenever the
-/// driver is) rather than link a detection lib — same philosophy as the engine
-/// shelling out to `llama-server`. A `GPU ` line means yes.
+/// Is there an NVIDIA GPU? Primary signal is `nvidia-smi -L`; but it isn't always
+/// on PATH even when the driver is (containers, some WSL2/minimal setups, a
+/// stripped child PATH), so fall back to the presence of the driver lib itself.
+/// A false positive just means the bridge load fails non-fatally → CPU.
 fn nvidia_present() -> bool {
+    nvidia_smi_reports_gpu() || driver_lib_present()
+}
+
+fn nvidia_smi_reports_gpu() -> bool {
     use std::process::Command;
     let exe = if cfg!(windows) { "nvidia-smi.exe" } else { "nvidia-smi" };
     match Command::new(exe).arg("-L").output() {
         Ok(out) => out.status.success() && String::from_utf8_lossy(&out.stdout).contains("GPU "),
-        Err(_) => false, // not on PATH → no usable NVIDIA driver
+        Err(_) => false,
+    }
+}
+
+/// The NVIDIA driver library (not the toolkit stub) — present iff a driver is
+/// installed. Covers standard Linux, WSL2, and Windows locations.
+fn driver_lib_present() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        return [
+            "/usr/lib/x86_64-linux-gnu/libcuda.so.1",
+            "/usr/lib/wsl/lib/libcuda.so.1",
+            "/usr/lib64/libcuda.so.1",
+            "/usr/lib/aarch64-linux-gnu/libcuda.so.1",
+        ]
+        .iter()
+        .any(|p| Path::new(p).exists());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let sysroot = std::env::var("SystemRoot").unwrap_or_else(|_| String::from("C:\\Windows"));
+        return Path::new(&sysroot).join("System32").join("nvcuda.dll").exists();
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        false
     }
 }
 
@@ -109,18 +139,22 @@ fn cuda_runtime_dirs() -> Vec<PathBuf> {
     }
 
     // pip wheels (`nvidia-cuda-runtime-cu12`, `nvidia-cublas-cu12`) — common for ML
-    // devs; cudart and cublas land in *separate* nvidia/*/lib dirs, so add each.
+    // devs; cudart and cublas land in *separate* nvidia/*/lib dirs. Cover `--user`
+    // (~/.local) AND the active virtualenv/conda env, where most devs install.
+    let mut wheel_roots: Vec<PathBuf> = Vec::new();
     if let Some(home) = dirs::home_dir() {
-        let py_libs = home.join(".local").join("lib");
-        if let Ok(rd) = std::fs::read_dir(&py_libs) {
-            for e in rd.flatten() {
-                let nvidia = e.path().join("site-packages").join("nvidia");
-                if let Ok(pkgs) = std::fs::read_dir(&nvidia) {
-                    for pkg in pkgs.flatten() {
-                        add(pkg.path().join("lib"));
-                    }
-                }
+        wheel_roots.push(home.join(".local"));
+    }
+    for env_var in ["VIRTUAL_ENV", "CONDA_PREFIX"] {
+        if let Ok(prefix) = std::env::var(env_var) {
+            if !prefix.is_empty() {
+                wheel_roots.push(PathBuf::from(prefix));
             }
+        }
+    }
+    for root in &wheel_roots {
+        for d in nvidia_wheel_lib_dirs(root) {
+            add(d);
         }
     }
 
@@ -141,6 +175,24 @@ fn cuda_runtime_dirs() -> Vec<PathBuf> {
     }
 
     dirs
+}
+
+/// `<prefix>/lib/<python*>/site-packages/nvidia/<pkg>/lib` dirs — where the
+/// nvidia-*-cu12 wheels drop libcudart/libcublas (each in its own pkg dir).
+fn nvidia_wheel_lib_dirs(prefix: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let Ok(pys) = std::fs::read_dir(prefix.join("lib")) else {
+        return out;
+    };
+    for py in pys.flatten() {
+        let nvidia = py.path().join("site-packages").join("nvidia");
+        if let Ok(pkgs) = std::fs::read_dir(&nvidia) {
+            for pkg in pkgs.flatten() {
+                out.push(pkg.path().join("lib"));
+            }
+        }
+    }
+    out
 }
 
 /// Does this directory contain a CUDA runtime lib the bridge needs?

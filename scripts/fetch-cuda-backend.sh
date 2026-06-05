@@ -28,14 +28,19 @@ DEST_ROOT="$REPO_ROOT/src-tauri/binaries"
 LLAMA_BUILD="${LLAMA_BUILD:-$(cat "$DEST_ROOT"/*/.llama-build 2>/dev/null | head -1 || true)}"
 [ -z "${LLAMA_BUILD:-}" ] && { echo "No build tag: set LLAMA_BUILD or run scripts/fetch-engine.sh first." >&2; exit 1; }
 
-# CUDA compute arches to compile for: Turing(75) Ampere(80,86) Ada(89) Hopper(90)
-# Blackwell(120). Pre-Turing GPUs fall back to CPU. sm_120 requires CUDA >= 12.8.
-CUDA_ARCHS="${CUDA_ARCHS:-75;80;86;89;90;120}"
+# CUDA compute arches to compile for: Ampere(86)=RTX30, Ada(89)=RTX40,
+# Blackwell(120)=RTX50 — the last three consumer generations (~42 MB each).
+# Datacenter (80=A100, 90=H100) and pre-Ampere (75=RTX20/GTX16) are omitted to keep
+# the bridge small; those GPUs fall back to CPU. Override via $CUDA_ARCHS.
+# sm_120 requires CUDA >= 12.8.
+CUDA_ARCHS="${CUDA_ARCHS:-86;89;120}"
 CUDA_IMAGE="${CUDA_IMAGE:-nvidia/cuda:12.8.0-devel-ubuntu22.04}"
 
 case "$(uname -s)/$(uname -m)" in
+  # win-cuda-13.3 (not 12.4): the 12.4 toolkit predates compute_120, so its DLL has
+  # no Blackwell (RTX 50xx) kernel — matching the Linux sm_120 build, use 13.3.
   Linux/x86_64)                              TRIPLE="x86_64-unknown-linux-gnu"; LIB="libggml-cuda.so"; MODE="build" ;;
-  MINGW*/x86_64|MSYS*/x86_64|CYGWIN*/x86_64) TRIPLE="x86_64-pc-windows-msvc";   LIB="ggml-cuda.dll";   MODE="fetch"; ASSET_GREP="win-cuda-12.4-x64" ;;
+  MINGW*/x86_64|MSYS*/x86_64|CYGWIN*/x86_64) TRIPLE="x86_64-pc-windows-msvc";   LIB="ggml-cuda.dll";   MODE="fetch"; ASSET_GREP="win-cuda-13.3-x64" ;;
   Darwin/*)                                  echo "macOS uses built-in Metal; no CUDA bridge needed."; exit 0 ;;
   *)                                         echo "No CUDA bridge for $(uname -s)/$(uname -m) (CPU only)."; exit 0 ;;
 esac

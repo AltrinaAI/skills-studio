@@ -216,11 +216,15 @@ fn download_model(spec: &ModelSpec, dest: &PathBuf) -> Result<(), String> {
 /// How many layers to offload to GPU. `auto` lets llama-server choose based on
 /// available VRAM — paired with the default `--fit on`, which trims layers (down
 /// to `--fit-ctx`) to leave a per-device margin — and resolves to 0 (pure CPU)
-/// when no GPU backend is loaded, so it's safe on CPU-only machines. The fallback
-/// path passes `"0"` to force CPU if a GPU spawn fails outright.
+/// when no GPU backend is loaded. Only passed on the GPU attempt; the CPU path
+/// uses `"0"` so nothing offloads even if ggml auto-loads a sibling CUDA backend.
 const GPU_NGL: &str = "auto";
 /// How long to wait for the server's `/health` to report ready (model load).
 const READY_TIMEOUT: Duration = Duration::from_secs(180);
+/// Tighter deadline for the GPU attempt: a working GPU load is quick, so if it
+/// stalls (driver/VRAM trouble) we fail over to the CPU spawn — which gets the
+/// full `READY_TIMEOUT` — promptly, instead of burning ~3 min before falling back.
+const GPU_READY_TIMEOUT: Duration = Duration::from_secs(60);
 
 struct Engine {
     child: Child,
@@ -339,7 +343,13 @@ fn free_port() -> Result<u16, String> {
     Ok(port) // listener dropped here → port freed for llama-server
 }
 
-fn spawn_one(model: &PathBuf, ctx: u32, ngl: &str) -> Result<Engine, String> {
+fn spawn_one(
+    model: &PathBuf,
+    ctx: u32,
+    ngl: &str,
+    gpu: Option<&crate::gpu::GpuBackend>,
+    ready_timeout: Duration,
+) -> Result<Engine, String> {
     let port = free_port()?;
     let bin = engine_binary();
     ensure_executable(&bin); // bundling as a resource can drop the exec bit on unix
@@ -365,24 +375,19 @@ fn spawn_one(model: &PathBuf, ctx: u32, ngl: &str) -> Result<Engine, String> {
         Stdio::null()
     });
     // Build the child's dynamic-library search path: the engine's own dir (sibling
-    // ggml libs; rpath=$ORIGIN usually covers it, but be explicit) plus, on the GPU
-    // attempt, the user's CUDA runtime dirs so the bundled CUDA bridge can resolve
-    // libcudart/libcublas.
+    // ggml libs; rpath=$ORIGIN usually covers it, but be explicit) plus, when a GPU
+    // backend was selected, the user's CUDA runtime dirs so the bridge can resolve
+    // libcudart/libcublas. `gpu` is Some only on the acceleration attempt — the
+    // caller decides; the CPU attempt passes None so nothing offloads.
     let mut lib_dirs: Vec<PathBuf> = Vec::new();
     if let Some(dir) = bin.parent() {
         if !dir.as_os_str().is_empty() {
             lib_dirs.push(dir.to_path_buf());
         }
     }
-    // Use the GPU only on the acceleration attempt (ngl != "0"). We bundle a
-    // libggml-cuda.so bridge; if the user has the CUDA runtime, `-ngl auto` offloads
-    // to it, otherwise the backend fails to load (non-fatal) and llama-server runs
-    // on CPU — and the spawn_engine fallback also re-attempts pinned to CPU.
-    if ngl != "0" {
-        if let Some(gpu) = crate::gpu::usable_gpu_backend() {
-            cmd.env("GGML_BACKEND_PATH", &gpu.backend_lib);
-            lib_dirs.extend(gpu.lib_dirs);
-        }
+    if let Some(g) = gpu {
+        cmd.env("GGML_BACKEND_PATH", &g.backend_lib);
+        lib_dirs.extend(g.lib_dirs.iter().cloned());
     }
     add_lib_paths(&mut cmd, &lib_dirs);
     let child = cmd.spawn().map_err(|e| {
@@ -394,7 +399,7 @@ fn spawn_one(model: &PathBuf, ctx: u32, ngl: &str) -> Result<Engine, String> {
     })?;
 
     let mut engine = Engine { child, port };
-    match wait_ready(&mut engine) {
+    match wait_ready(&mut engine, ready_timeout) {
         Ok(()) => Ok(engine),
         Err(e) => {
             drop(engine); // kills the child
@@ -403,26 +408,31 @@ fn spawn_one(model: &PathBuf, ctx: u32, ngl: &str) -> Result<Engine, String> {
     }
 }
 
-/// Spawn the engine. `-ngl auto` lets llama-server fit the model to whatever GPU
-/// it finds (or run on CPU when there's no GPU backend); if that spawn fails
-/// outright — e.g. a present-but-broken GPU backend that errors at init — retry
-/// pinned to CPU so the feature still works.
+/// Spawn the engine, deciding GPU-vs-CPU up front. When a GPU backend is selected
+/// we try it first under a tight timeout, then fall back to CPU. When none is
+/// selected (GPU disabled, non-NVIDIA, or no CUDA runtime) we spawn straight to
+/// CPU with `-ngl 0` — authoritative even though ggml may auto-load a sibling CUDA
+/// backend, since 0 layers offload. Only the GPU attempt is retried on CPU; a
+/// pure-CPU failure surfaces immediately rather than re-running an identical spawn.
 fn spawn_engine(model: &PathBuf, ctx: u32) -> Result<Engine, String> {
-    match spawn_one(model, ctx, GPU_NGL) {
-        Ok(e) => Ok(e),
-        Err(_) => spawn_one(model, ctx, "0"), // GPU init failed → CPU
+    if let Some(gpu) = crate::gpu::usable_gpu_backend() {
+        if let Ok(e) = spawn_one(model, ctx, GPU_NGL, Some(&gpu), GPU_READY_TIMEOUT) {
+            return Ok(e);
+        }
+        // GPU init failed or stalled within the tight deadline → fall back to CPU.
     }
+    spawn_one(model, ctx, "0", None, READY_TIMEOUT)
 }
 
 /// Poll `/health` until it returns 200 (only then is the model loaded and ready)
-/// or the child dies / we time out.
-fn wait_ready(engine: &mut Engine) -> Result<(), String> {
+/// or the child dies / we hit `timeout`.
+fn wait_ready(engine: &mut Engine, timeout: Duration) -> Result<(), String> {
     let url = format!("http://127.0.0.1:{}/health", engine.port);
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_millis(500))
         .timeout_read(Duration::from_secs(2))
         .build();
-    let deadline = Instant::now() + READY_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     loop {
         if engine.exited() {
             return Err("The local AI engine exited before it was ready.".into());
