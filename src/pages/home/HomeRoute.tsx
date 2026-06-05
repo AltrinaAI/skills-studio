@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Spinner, ThemeToggle } from "@/components/ui";
+import { Spinner } from "@/components/ui";
 import NavBar from "@/components/NavBar";
 import { FolderIcon } from "@/components/FileIcon";
 import FolderPicker from "@/components/FolderPicker";
@@ -12,8 +12,7 @@ import { agentColor, kindMeta, KIND_TAG, AGENT_GROUP_INFO } from "@/lib/agents";
 import * as api from "@/lib/api";
 import type { AgentSkills, DiscoveredSkill } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
-import { secretsPath, studioPath } from "@/lib/routes";
-import { toggleTheme } from "@/lib/theme";
+import { studioPath } from "@/lib/routes";
 
 const EXAMPLES = [
   { name: "docx", path: "examples/docx", blurb: "Create & edit Word documents" },
@@ -40,15 +39,6 @@ function ImportIcon() {
     </svg>
   );
 }
-function KeyIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <circle cx="7.5" cy="15.5" r="5.5" />
-      <path d="m21 2-9.6 9.6" />
-      <path d="m15.5 7.5 3 3L22 7l-3-3" />
-    </svg>
-  );
-}
 function RefreshIcon({ className = "" }: { className?: string }) {
   return (
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden className={className}>
@@ -56,14 +46,6 @@ function RefreshIcon({ className = "" }: { className?: string }) {
       <path d="M21 3v5h-5" />
       <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
       <path d="M3 21v-5h5" />
-    </svg>
-  );
-}
-function TerminalIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <rect x="3" y="4" width="18" height="16" rx="2" />
-      <path d="m7 9 3 3-3 3M13 15h4" />
     </svg>
   );
 }
@@ -395,7 +377,6 @@ export function Component() {
   const recents = useRecents();
   const navigate = useNavigate();
   const onOpen = (p: string) => navigate(studioPath(p));
-  const onOpenTerminals = () => navigate("/terminals");
   const [path, setPath] = useState("");
   const [newOpen, setNewOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
@@ -530,25 +511,6 @@ export function Component() {
           <ImportIcon />
           <span className="hidden text-xs sm:inline">Import</span>
         </button>
-        <button
-          type="button"
-          onClick={onOpenTerminals}
-          title="Open the terminals workspace"
-          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-muted hover:bg-panel hover:text-fg"
-        >
-          <TerminalIcon />
-          <span className="hidden text-xs sm:inline">Terminals</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => navigate(secretsPath())}
-          title="Secrets"
-          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-muted hover:bg-panel hover:text-fg"
-        >
-          <KeyIcon />
-          <span className="hidden text-xs sm:inline">Secrets</span>
-        </button>
-        <ThemeToggle onClick={toggleTheme} />
       </NavBar>
 
       <main className="mx-auto w-full max-w-7xl flex-1 px-6 pb-24 pt-10">

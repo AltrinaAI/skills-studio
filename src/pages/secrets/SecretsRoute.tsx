@@ -1,9 +1,6 @@
 "use client";
 
-import { useNavigate } from "react-router-dom";
 import NavBar from "@/components/NavBar";
-import { ThemeToggle } from "@/components/ui";
-import { toggleTheme } from "@/lib/theme";
 import LocalStoreCard from "./LocalStoreCard";
 import ProviderGallery from "./ProviderGallery";
 
@@ -14,12 +11,9 @@ import ProviderGallery from "./ProviderGallery";
  * and the studio Manage drawer.
  */
 export function Component() {
-  const navigate = useNavigate();
-
   return (
     <div className="flex min-h-screen flex-col">
       <NavBar
-        onHome={() => navigate("/")}
         breadcrumb={
           <>
             <span className="text-faint" aria-hidden>
@@ -28,9 +22,7 @@ export function Component() {
             <span className="font-medium text-fg">Secrets</span>
           </>
         }
-      >
-        <ThemeToggle onClick={toggleTheme} />
-      </NavBar>
+      />
 
       <main className="mx-auto w-full max-w-3xl flex-1 px-6 pb-24 pt-10">
         <h1 className="text-2xl font-semibold tracking-tight text-fg">Secrets</h1>

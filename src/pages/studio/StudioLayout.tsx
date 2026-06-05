@@ -3,7 +3,6 @@ import { Outlet, useMatch, useNavigate, useSearchParams } from "react-router-dom
 import { skillKind } from "@/lib/agents";
 import { requiredEnv } from "@/lib/skill";
 import * as api from "@/lib/api";
-import { toggleTheme } from "@/lib/theme";
 import { armDiscardBypass } from "@/lib/editorState";
 import TopBar from "./TopBar";
 import Sidebar from "./Sidebar";
@@ -76,7 +75,6 @@ export default function StudioLayout() {
   return (
     <div className="flex h-screen flex-col bg-app text-fg">
       <TopBar
-        onHome={() => navigate("/")}
         skillName={skillName(data)}
         selected={selected}
         reviewMode={reviewMode}
@@ -84,7 +82,6 @@ export default function StudioLayout() {
         onToggleReview={toggleReview}
         onManage={() => setManageOpen(true)}
         onExport={onExport}
-        toggleTheme={toggleTheme}
       />
       <PreviewBanner />
       <div className="flex min-h-0 flex-1">

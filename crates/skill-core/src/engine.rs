@@ -7,10 +7,13 @@
 //!
 //! Lifecycle: lazily spawned on first use, bound to `127.0.0.1` on an ephemeral
 //! port, kept warm in a global for the session, and reaped on app/server exit.
-//! GPU is attempted first (`-ngl 99`, auto-selecting Metal/Vulkan/CUDA via the
-//! engine's dynamic backends); on failure it falls back to CPU (`-ngl 0`) so it
-//! runs everywhere. The model is a single GGUF downloaded on first use (or
-//! pointed at a local file for airgapped installs), never bundled in the binary.
+//! GPU offload is delegated to llama-server's own VRAM-aware fitting (`-ngl auto`
+//! with the default `--fit on`): it offloads as many layers as fit the detected
+//! device(s) within a per-device margin and runs the rest on CPU, resolving to
+//! pure CPU when no GPU backend is loaded — so it runs everywhere. GPU backends
+//! (Vulkan/CUDA/…) load dynamically from sibling `libggml-*` libs when present.
+//! The model is a single GGUF downloaded on first use (or pointed at a local
+//! file for airgapped installs), never bundled in the binary.
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -210,10 +213,12 @@ fn download_model(spec: &ModelSpec, dest: &PathBuf) -> Result<(), String> {
 
 // ──────────────────────────── server process ────────────────────────────
 
-/// Layers to offload to the GPU when attempting acceleration. 999 = "all";
-/// llama.cpp clamps to the model's layer count and auto-selects an available
-/// backend (Metal/Vulkan/CUDA), so this is a no-op on CPU-only machines.
-const GPU_NGL: u32 = 999;
+/// How many layers to offload to GPU. `auto` lets llama-server choose based on
+/// available VRAM — paired with the default `--fit on`, which trims layers (down
+/// to `--fit-ctx`) to leave a per-device margin — and resolves to 0 (pure CPU)
+/// when no GPU backend is loaded, so it's safe on CPU-only machines. The fallback
+/// path passes `"0"` to force CPU if a GPU spawn fails outright.
+const GPU_NGL: &str = "auto";
 /// How long to wait for the server's `/health` to report ready (model load).
 const READY_TIMEOUT: Duration = Duration::from_secs(180);
 
@@ -331,7 +336,7 @@ fn free_port() -> Result<u16, String> {
     Ok(port) // listener dropped here → port freed for llama-server
 }
 
-fn spawn_one(model: &PathBuf, ctx: u32, ngl: u32) -> Result<Engine, String> {
+fn spawn_one(model: &PathBuf, ctx: u32, ngl: &str) -> Result<Engine, String> {
     let port = free_port()?;
     let bin = engine_binary();
     ensure_executable(&bin); // bundling as a resource can drop the exec bit on unix
@@ -346,7 +351,7 @@ fn spawn_one(model: &PathBuf, ctx: u32, ngl: u32) -> Result<Engine, String> {
         "-c",
         &ctx.to_string(),
         "-ngl",
-        &ngl.to_string(),
+        ngl,
         "--jinja", // use the model's embedded chat template (so enable_thinking is honored)
     ])
     .stdout(Stdio::null())
@@ -381,11 +386,14 @@ fn spawn_one(model: &PathBuf, ctx: u32, ngl: u32) -> Result<Engine, String> {
     }
 }
 
-/// Spawn the engine, trying GPU offload first then falling back to CPU.
+/// Spawn the engine. `-ngl auto` lets llama-server fit the model to whatever GPU
+/// it finds (or run on CPU when there's no GPU backend); if that spawn fails
+/// outright — e.g. a present-but-broken GPU backend that errors at init — retry
+/// pinned to CPU so the feature still works.
 fn spawn_engine(model: &PathBuf, ctx: u32) -> Result<Engine, String> {
     match spawn_one(model, ctx, GPU_NGL) {
         Ok(e) => Ok(e),
-        Err(_) => spawn_one(model, ctx, 0), // GPU init failed → CPU
+        Err(_) => spawn_one(model, ctx, "0"), // GPU init failed → CPU
     }
 }
 

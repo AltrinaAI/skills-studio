@@ -274,7 +274,7 @@ export default function SourceControl({ root, dirName }: { root: string; dirName
             const name = f.path.slice(dir.length);
             const active = f.path === selectedRel;
             return (
-              <li key={f.path} className={`group flex items-center gap-2 px-3 py-1 ${active ? "bg-accent-soft" : "hover:bg-surface"}`}>
+              <li key={f.path} className={`group flex items-center gap-2 border-l-2 px-3 py-1 ${active ? "border-accent bg-accent-soft" : "border-transparent hover:border-accent hover:bg-surface"}`}>
                 <button type="button" onClick={() => openChange(f)} className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
                   <span className="min-w-0 flex-1 truncate text-xs" title={f.origPath ? `${f.origPath} → ${f.path}` : f.path}>
                     <span className="text-fg">{name}</span>
@@ -317,10 +317,10 @@ export default function SourceControl({ root, dirName }: { root: string; dirName
                       ? "Save these edits as a new version (⌘S)"
                       : "Save a version (⌘S)"
                 }
-                className="flex w-full items-center justify-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-opacity hover:opacity-90 disabled:opacity-40"
+                className="flex w-full items-center justify-center gap-1.5 rounded-md border border-accent/50 px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent-soft disabled:opacity-40"
               >
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                  <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+                  <polyline points="20 6 9 17 4 12" />
                 </svg>
                 {preview ? "Save as new version" : "Save version"}
               </button>

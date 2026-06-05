@@ -1,6 +1,5 @@
 "use client";
 
-import { ThemeToggle } from "@/components/ui";
 import NavBar from "@/components/NavBar";
 import { requestSave, useEditorStatus } from "@/lib/editorState";
 
@@ -24,7 +23,6 @@ function AutosaveIndicator() {
 }
 
 export default function TopBar({
-  onHome,
   skillName,
   selected,
   reviewMode,
@@ -32,9 +30,7 @@ export default function TopBar({
   onToggleReview,
   onManage,
   onExport,
-  toggleTheme,
 }: {
-  onHome: () => void;
   skillName: string;
   selected: string | null;
   /** The diff overlay is currently on for the open file. */
@@ -44,11 +40,9 @@ export default function TopBar({
   onToggleReview: () => void;
   onManage: () => void;
   onExport: () => void;
-  toggleTheme: () => void;
 }) {
   return (
     <NavBar
-      onHome={onHome}
       breadcrumb={
         <>
           <span className="text-faint" aria-hidden>
@@ -108,7 +102,6 @@ export default function TopBar({
         </svg>
         <span className="hidden sm:inline">Export .zip</span>
       </button>
-      <ThemeToggle onClick={toggleTheme} />
     </NavBar>
   );
 }

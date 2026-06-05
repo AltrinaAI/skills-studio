@@ -222,7 +222,7 @@ function SkillErrorShell({ root, message }: { root: string; message: string }) {
   const navigate = useNavigate();
   return (
     <div className="flex h-screen flex-col bg-app text-fg">
-      <NavBar onHome={() => navigate("/")} />
+      <NavBar />
       <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
         <p className="text-sm text-danger">{message}</p>
         <p className="max-w-md break-all font-mono text-xs text-faint">{root}</p>

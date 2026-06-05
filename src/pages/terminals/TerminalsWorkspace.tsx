@@ -1,19 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { ThemeToggle } from "@/components/ui";
-import { toggleTheme } from "@/lib/theme";
+import NavBar from "@/components/NavBar";
 import NewTerminalDialog from "./NewTerminalDialog";
 import TerminalPane from "./TerminalPane";
 import * as api from "@/lib/api";
 import type { TermSession } from "@/lib/api";
 
-function TerminalIcon() {
+function PlusIcon() {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <rect x="3" y="4" width="18" height="16" rx="2" />
-      <path d="m7 9 3 3-3 3M13 15h4" />
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M12 5v14M5 12h14" />
     </svg>
   );
 }
@@ -25,8 +22,6 @@ function TerminalIcon() {
  * exited / watchdog-reaped sessions drop out.
  */
 export default function TerminalsWorkspace({ visible }: { visible: boolean }) {
-  const navigate = useNavigate();
-  const onClose = () => navigate("/");
   const [sessions, setSessions] = useState<TermSession[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
@@ -65,28 +60,26 @@ export default function TerminalsWorkspace({ visible }: { visible: boolean }) {
 
   return (
     <div className="flex h-screen flex-col bg-app text-fg">
-      <header className="flex items-center gap-2 border-b border-border px-4 py-2.5">
-        <button
-          type="button"
-          onClick={onClose}
-          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-muted hover:bg-panel hover:text-fg"
-          title="Back"
-        >
-          <span aria-hidden>←</span>
-          <span className="text-xs">Back</span>
-        </button>
-        <span className="flex items-center gap-1.5 text-sm font-semibold text-fg">
-          <TerminalIcon /> Terminals
-        </span>
+      <NavBar
+        breadcrumb={
+          <>
+            <span className="text-faint" aria-hidden>
+              /
+            </span>
+            <span className="font-medium text-fg">Terminals</span>
+          </>
+        }
+      >
         <button
           type="button"
           onClick={() => setNewOpen(true)}
-          className="ml-auto rounded-md bg-fg px-2.5 py-1 text-xs font-medium text-app hover:opacity-90"
+          title="New terminal"
+          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-muted hover:bg-panel hover:text-fg"
         >
-          ＋ New terminal
+          <PlusIcon />
+          <span className="hidden text-xs sm:inline">New terminal</span>
         </button>
-        <ThemeToggle onClick={toggleTheme} />
-      </header>
+      </NavBar>
 
       <div className="flex min-h-0 flex-1">
         <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-surface">
