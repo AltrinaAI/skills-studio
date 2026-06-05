@@ -1,4 +1,4 @@
-# Agent Skill Studio
+# Skill Studio
 
 A desktop app for **viewing, editing, versioning, and running
 [Agent Skills](https://agentskills.io/home)** — the portable folders of human

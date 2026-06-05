@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Agent Skill Studio",
+  "productName": "Skill Studio",
   "version": "0.1.0",
   "identifier": "ai.generalagency.skillstudio",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Agent Skill Studio",
+        "title": "Skill Studio",
         "width": 1200,
         "height": 800,
         "minWidth": 720,

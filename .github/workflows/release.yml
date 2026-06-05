@@ -94,7 +94,7 @@ jobs:
         env:
           LLAMA_BUILD: b9486
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: scripts/fetch-engine.sh
+        run: bash scripts/fetch-engine.sh
 
       - uses: tauri-apps/tauri-action@v0
         env:

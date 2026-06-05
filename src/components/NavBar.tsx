@@ -18,7 +18,7 @@ export default function NavBar({
   const brand = (
     <span className="flex items-center gap-1.5">
       <TerminalMark className="h-4.5 w-auto text-fg" />
-      <span className="font-medium text-fg">Agent Skill Studio</span>
+      <span className="font-medium text-fg">Skill Studio</span>
     </span>
   );
 

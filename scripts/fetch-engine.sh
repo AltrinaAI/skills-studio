@@ -39,6 +39,9 @@ fetch() {
 API="https://api.github.com/repos/ggml-org/llama.cpp/releases"
 REL="$API/latest"; [ -n "${LLAMA_BUILD:-}" ] && REL="$API/tags/$LLAMA_BUILD"
 
+# Native Windows python.exe prints CRLF; strip \r so $TAG/$URL carry no trailing
+# carriage return (curl rejects an embedded CR as "Malformed input to a URL function",
+# and a CR-tainted "NONE\r" would also slip past the no-asset guard below).
 read -r TAG URL < <(fetch "$REL" | "$PY" -c "
 import sys, json
 d = json.load(sys.stdin)
@@ -46,7 +49,7 @@ g = '$ASSET_GREP'
 bad = ('vulkan', 'cuda', 'sycl', 'hip', 'musa')  # CPU build for a guaranteed baseline
 a = [x for x in d['assets'] if g in x['name'].lower() and not any(k in x['name'].lower() for k in bad)]
 print(d.get('tag_name', '?'), a[0]['browser_download_url'] if a else 'NONE')
-")
+" | tr -d '\r')
 [ "$URL" = "NONE" ] && { echo "No CPU asset matching '$ASSET_GREP' in llama.cpp $TAG" >&2; exit 1; }
 
 echo "llama.cpp $TAG → $TRIPLE  ($(basename "$URL"))"
