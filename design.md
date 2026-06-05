@@ -1,7 +1,7 @@
 # Skill Studio — Architecture & Design Principles
 
 > Read this before adding a feature. The one rule that matters most:
-> **every capability must be reachable over HTTP.**
+> **every capability is reached over HTTP. There is no second transport.**
 
 ## Core principle: frontend ⇄ backend over HTTP (separable, VS Code-remote model)
 
@@ -15,73 +15,81 @@ The app is two parts that can run on **different machines**:
 
 The contract between them is **HTTP/JSON** (plus **SSE** for streaming). That contract
 is what lets the backend run on one machine (WSL2, a remote dev box, a container) and
-the frontend in a browser on another — the VS Code-remote model.
+the frontend on another — the VS Code-remote model.
 
-## Transports (current reality)
+## One transport: HTTP only (decided)
 
-`src/lib/api.ts` auto-selects a transport at runtime via `isTauri`:
+**There is exactly one data path: HTTP/JSON + SSE.** The frontend never calls Tauri
+`invoke` for data; `skill-server` is the whole API.
 
-- **Browser** → `fetch('/api/...')` → skill-server. The canonical, remote-capable path.
-- **Tauri desktop** → in-process `invoke(...)`. A local-only fast path that avoids
-  running a separate server process.
+- **Browser.** Loads the SPA from skill-server and calls `/api/*` on the same origin.
+- **Desktop (Tauri).** The native shell is a **thin client**, not a backend: on startup
+  it brings up a `skill-server` (a loopback one for local use; a tunneled remote one for
+  the VS Code-remote case) and points the webview at `http://127.0.0.1:<port>`. The
+  webview then runs the exact same SPA, hitting `/api/*` on that same origin.
 
-Both call the **same** `skill-core` functions, so there is exactly one implementation of
-any capability. The Tauri commands (`src-tauri/src/lib.rs`) and the skill-server routes
-(`crates/skill-server/src/main.rs`) are **thin wrappers** over `skill-core`.
+So **"local" is just "remote where the host is localhost."** Both run identical code.
 
-> **Design intent: HTTP is the source of truth.** `invoke` is an optimization, not a
-> second API. A feature that works only via `invoke` is a **bug** — it breaks the
-> browser/remote deployment. If you can't reach it from `skill-server`, it isn't done.
+> **Why we removed the `invoke` fast path.** A dual `invoke`/HTTP transport meant every
+> capability had two call sites and could silently diverge — a feature wired only through
+> `invoke` worked in the native app but broke the browser/remote deployment. Collapsing to
+> HTTP-only erases that divergence and makes "connect to any server you have SSH access to"
+> a configuration change, not a second architecture.
+
+### Same-origin keeps the CSP simple
+
+Because the webview always points at the active server's origin, `/api/*` (fetch **and**
+the SSE `EventSource`) is always **same-origin**. The desktop CSP `default-src 'self'`
+already covers it — local loopback and a remote SSH tunnel alike (the tunnel's local end
+is also `127.0.0.1:<port>`). Any *outbound* network beyond the server (e.g. a cloud LLM
+fallback) must still originate in **Rust** on the server side, never the webview.
 
 ## Rule for adding a feature
 
-1. **Logic** → a function in `skill-core` (keep it Tauri-free so `skill-server` still
-   builds).
+1. **Logic** → a function in `skill-core` (keep it Tauri-free so `skill-server` builds).
 2. **HTTP route** → a match arm in `skill-server`'s `handle()` under `/api/<name>`.
-   **Mandatory** — this is the real API.
-3. **Tauri command (optional)** → a `#[tauri::command]` wrapper registered in
-   `generate_handler!`, for the desktop fast path.
-4. **Frontend** → one function in `src/lib/api.ts` using the
-   `isTauri ? invoke(...) : http(...)` pattern.
+   **This is the API.** If you can't reach it from skill-server, it isn't done.
+3. **Frontend** → one function in `src/lib/api.ts` that calls `http(...)`. No `invoke`,
+   no `isTauri` branch.
 
 Extra constraints:
-- **Streaming** uses SSE on the server (`request.into_writer()` + chunked `data:` frames —
-  see `stream_terminal`) and a Tauri `Channel<T>` on the desktop side (see
-  `terminal_attach` / `attachTerminal`). Don't design around a duplex channel only one
-  transport has.
-- **No CSP-violating calls from the webview.** The desktop CSP is `default-src 'self'`;
-  any outbound network (e.g. a cloud LLM fallback) must originate in **Rust**, never the
-  browser.
+- **Streaming** uses SSE (`request.into_writer()` + chunked `data:` frames — see
+  `stream_terminal`), consumed with `EventSource` in `api.ts`. It rides a plain socket and
+  an SSH tunnel alike. Don't design around a duplex channel.
+- **No native-only capabilities.** Picking files/folders goes through the server, not an OS
+  dialog: browse the (possibly remote) filesystem with `/api/list-dir` + the in-app
+  `FolderPicker`, import a `.zip` via a file-input upload (`/api/import-zip`), export via a
+  `/api/download` link. A native OS dialog can only see the *client* machine, so it breaks
+  the remote model — there is no `invoke`-only escape hatch.
 
 ## Reference example: on-device commit messages
 
 - Logic: `skill-core/src/engine.rs` + `commitmsg.rs`.
 - HTTP: `POST /api/generate-commit-message`, `GET /api/commit-model-status`.
-- Tauri: `generate_commit_message`, `commit_model_status`.
-- Frontend: `api.generateCommitMessage()` / `api.commitModelStatus()`.
-- Verified end-to-end **through the HTTP path** (skill-server) — so it works in the
-  remote/browser deployment, not only the native app.
+- Frontend: `api.generateCommitMessage()` / `api.commitModelStatus()` over `http`.
+- Verified end-to-end through the HTTP path (skill-server) — the only path.
 
 ## Dev workflows
 
 | Goal | Backend | Frontend | Open |
 |------|---------|----------|------|
-| Native desktop | (in-process) | `npm run tauri dev` | the native window |
 | Browser, local backend | `cargo run -p skill-server` (`:8765`) | `npm run dev:vite` (`:1420`) | **`localhost:1420`** — Vite proxies `/api` → 8765 |
-| Browser, **remote** backend | skill-server on the remote host | `VITE_API_TARGET=http://<remote>:8765 npm run dev:vite` | `localhost:1420` |
-| Production / remote, no Vite | `npm run build` then run skill-server | (served by skill-server) | skill-server's port (UI + API, one origin) |
+| Browser/desktop, **remote** backend | skill-server on the remote host | `VITE_API_TARGET=http://<remote>:8765 npm run dev:vite` | `localhost:1420` |
+| Native desktop | the shell spawns a loopback `skill-server` | `npm run tauri dev` | the native window |
+| Production / remote | `npm run build` then run skill-server | (served by skill-server) | skill-server's port (UI + API, one origin) |
 
 The Vite `/api` proxy lives in `vite.config.ts` (`server.proxy`, target overridable via
-`VITE_API_TARGET`). The native app ignores it (it uses `invoke`).
+`VITE_API_TARGET`). In `tauri dev` the same proxy serves the webview's `/api`, so a
+`skill-server` must be running at the proxy target.
 
-## Open decision: go strictly HTTP-only?
+## Next: the connection manager (VS Code "Remote - SSH")
 
-To erase the browser/native divergence entirely (no `invoke` anywhere), the desktop build
-would: spawn a loopback `skill-server` on startup, point the webview at it, and make
-`api.ts` always use `http`. The desktop and remote experiences become identical and there
-is a single code path.
-
-Cost: manage the embedded server's lifecycle (start/health/reap) and add a localhost
-`connect-src` to the CSP. **Not yet done** — flagged here as a deliberate choice. Until
-then, the rule above (HTTP parity is mandatory; `invoke` is an optional fast path) keeps
-the app fully remote-capable.
+HTTP-only makes "remote" a config change; the remaining work is the broker that provisions
+and connects a remote server. Sketch:
+- Shell out to the system `ssh` (inherits the user's keys/config/ProxyJump — "any host you
+  can already SSH to" comes free).
+- Detect the remote arch; ensure a version-pinned `skill-server` is installed (scp a static
+  `musl` build if missing — one file, no runtime to install).
+- Launch it on an ephemeral port with a bearer token; read `ready port=N token=T` from stdout.
+- SSH `-L` forward to that port; point the webview/`API_BASE` at the local end with the token.
+- skill-server's terminals are tmux-backed, so sessions already survive reconnects.

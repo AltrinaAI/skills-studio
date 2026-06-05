@@ -107,4 +107,8 @@ jobs:
           releaseName: "Agent Skill Studio ${{ github.ref_name }}"
           releaseDraft: true
           prerelease: false
-          args: ${{ matrix.platform == 'macos-13' && '--target x86_64-apple-darwin' || '' }}
+          # Windows ships UNSIGNED for now (no code-signing certificate yet): --no-sign makes
+          # tauri skip signing entirely. To enable signing once a cert is provisioned, drop the
+          # `--no-sign` branch below — the bundle.windows.signCommand + scripts/sign-windows.ps1
+          # are kept in place. (&& / || precedence: each `A && B` is evaluated before the `||`s.)
+          args: ${{ matrix.platform == 'macos-13' && '--target x86_64-apple-darwin' || matrix.platform == 'windows-latest' && '--no-sign' || '' }}

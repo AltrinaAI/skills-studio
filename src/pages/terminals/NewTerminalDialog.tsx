@@ -106,14 +106,7 @@ export default function NewTerminalDialog({
 
   const selected = useMemo(() => agents?.find((a) => a.id === agentId), [agents, agentId]);
 
-  const chooseCwd = async () => {
-    if (api.isTauri) {
-      const p = await api.pickSkillFolder();
-      if (p) setCwd(p);
-    } else {
-      setPickerOpen(true);
-    }
-  };
+  const chooseCwd = () => setPickerOpen(true);
 
   const create = async () => {
     if (!selected) return;

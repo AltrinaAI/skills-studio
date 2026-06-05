@@ -254,7 +254,7 @@ fn engine() -> &'static Mutex<Option<Engine>> {
 ///      env var. In a shipped build this baked-in path doesn't exist, so it's
 ///      skipped and (1) carries it.
 ///   4. `PATH`.
-fn engine_binary() -> PathBuf {
+pub(crate) fn engine_binary() -> PathBuf {
     if let Ok(p) = std::env::var("SKILL_STUDIO_LLAMA_SERVER") {
         if !p.is_empty() {
             return PathBuf::from(p);
@@ -308,25 +308,28 @@ fn find_in_dir(base: &std::path::Path, exe: &str) -> Option<PathBuf> {
     direct.is_file().then_some(direct)
 }
 
-/// Prepend the engine binary's directory to the platform's dynamic-library search
-/// path for the spawned child, so llama.cpp's sibling shared libs always load.
-fn add_lib_path(cmd: &mut Command, dir: &std::path::Path) {
-    let d = dir.to_string_lossy().into_owned();
-    #[cfg(target_os = "windows")]
-    {
-        let prev = std::env::var("PATH").unwrap_or_default();
-        cmd.env("PATH", format!("{d};{prev}"));
+/// Prepend directories to the platform's dynamic-library search path for the
+/// spawned child, so llama.cpp's sibling shared libs (and, for GPU, the user's
+/// CUDA runtime) always load.
+fn add_lib_paths(cmd: &mut Command, dirs: &[PathBuf]) {
+    if dirs.is_empty() {
+        return;
     }
-    #[cfg(target_os = "macos")]
-    {
-        let prev = std::env::var("DYLD_LIBRARY_PATH").unwrap_or_default();
-        cmd.env("DYLD_LIBRARY_PATH", if prev.is_empty() { d } else { format!("{d}:{prev}") });
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let prev = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
-        cmd.env("LD_LIBRARY_PATH", if prev.is_empty() { d } else { format!("{d}:{prev}") });
-    }
+    let sep = if cfg!(windows) { ";" } else { ":" };
+    let joined = dirs
+        .iter()
+        .map(|d| d.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(sep);
+    let var = if cfg!(windows) {
+        "PATH"
+    } else if cfg!(target_os = "macos") {
+        "DYLD_LIBRARY_PATH"
+    } else {
+        "LD_LIBRARY_PATH"
+    };
+    let prev = std::env::var(var).unwrap_or_default();
+    cmd.env(var, if prev.is_empty() { joined } else { format!("{joined}{sep}{prev}") });
 }
 
 /// Bind to port 0 to let the OS pick a free port, then release it for the child.
@@ -361,13 +364,27 @@ fn spawn_one(model: &PathBuf, ctx: u32, ngl: &str) -> Result<Engine, String> {
     } else {
         Stdio::null()
     });
-    // Bundled/vendored llama.cpp ships its shared libs next to the binary; make
-    // the dynamic loader find them (rpath=$ORIGIN usually covers it, but be explicit).
+    // Build the child's dynamic-library search path: the engine's own dir (sibling
+    // ggml libs; rpath=$ORIGIN usually covers it, but be explicit) plus, on the GPU
+    // attempt, the user's CUDA runtime dirs so the bundled CUDA bridge can resolve
+    // libcudart/libcublas.
+    let mut lib_dirs: Vec<PathBuf> = Vec::new();
     if let Some(dir) = bin.parent() {
         if !dir.as_os_str().is_empty() {
-            add_lib_path(&mut cmd, dir);
+            lib_dirs.push(dir.to_path_buf());
         }
     }
+    // Use the GPU only on the acceleration attempt (ngl != "0"). We bundle a
+    // libggml-cuda.so bridge; if the user has the CUDA runtime, `-ngl auto` offloads
+    // to it, otherwise the backend fails to load (non-fatal) and llama-server runs
+    // on CPU — and the spawn_engine fallback also re-attempts pinned to CPU.
+    if ngl != "0" {
+        if let Some(gpu) = crate::gpu::usable_gpu_backend() {
+            cmd.env("GGML_BACKEND_PATH", &gpu.backend_lib);
+            lib_dirs.extend(gpu.lib_dirs);
+        }
+    }
+    add_lib_paths(&mut cmd, &lib_dirs);
     let child = cmd.spawn().map_err(|e| {
         format!(
             "Couldn't start the local AI engine (llama-server): {e}. \

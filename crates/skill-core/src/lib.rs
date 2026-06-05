@@ -5,6 +5,7 @@ pub mod discover;
 pub mod engine;
 pub mod filetypes;
 pub mod gitops;
+pub mod gpu;
 pub mod pathsafe;
 pub mod secrets;
 pub mod skill;

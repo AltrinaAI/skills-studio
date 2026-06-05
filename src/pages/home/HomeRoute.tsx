@@ -475,14 +475,7 @@ export function Component() {
   );
 
   const [showPicker, setShowPicker] = useState(false);
-  const browse = async () => {
-    if (api.isTauri) {
-      const p = await api.pickSkillFolder();
-      if (p) onOpen(p);
-    } else {
-      setShowPicker(true);
-    }
-  };
+  const browse = () => setShowPicker(true);
 
   // Proposed drafts surface in their own section; the per-agent "Discovered" list
   // shows everything else.

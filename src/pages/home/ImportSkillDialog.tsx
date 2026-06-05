@@ -95,30 +95,15 @@ export default function ImportSkillDialog({
     }
   };
 
-  const chooseFolder = async () => {
-    if (api.isTauri) {
-      const path = await api.pickSkillFolder();
-      if (path) void attempt((ow) => api.importSkillFolder(path, target, ow));
-    } else {
-      setPickerOpen(true);
-    }
-  };
-  const chooseZip = async () => {
-    if (api.isTauri) {
-      const path = await api.pickZipFile();
-      if (path) void attempt((ow) => api.importSkillZipPath(path, target, ow));
-    } else {
-      fileInputRef.current?.click();
-    }
-  };
+  const chooseFolder = () => setPickerOpen(true);
+  const chooseZip = () => fileInputRef.current?.click();
   const importZipFile = (file: File) =>
     void attempt(async (ow) => api.importSkillZipUpload(await fileToBase64(file), target, ow));
 
-  // Browser-only file drop (Tauri intercepts OS drag-drop; use the buttons there).
+  // File drop onto the dropzone (expects a `.zip`); the buttons cover folder/zip too.
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragging(false);
-    if (api.isTauri) return;
     const file = e.dataTransfer.files?.[0];
     if (file && /\.zip$/i.test(file.name)) importZipFile(file);
     else if (file) setPhase({ t: "error", message: "Drop a .zip file (or use “Choose folder”)." });
@@ -204,10 +189,8 @@ export default function ImportSkillDialog({
                 type="button"
                 onClick={chooseZip}
                 onDragOver={(e) => {
-                  if (!api.isTauri) {
-                    e.preventDefault();
-                    setDragging(true);
-                  }
+                  e.preventDefault();
+                  setDragging(true);
                 }}
                 onDragLeave={() => setDragging(false)}
                 onDrop={onDrop}
@@ -216,7 +199,7 @@ export default function ImportSkillDialog({
                 }`}
               >
                 <span className="text-sm font-medium text-fg">
-                  {api.isTauri ? "Choose a .zip…" : "Drop a .zip here, or click to choose"}
+                  Drop a .zip here, or click to choose
                 </span>
                 <span className="text-xs text-muted">Exported skill archives (SKILL.md inside)</span>
               </button>

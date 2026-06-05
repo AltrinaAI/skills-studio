@@ -1,8 +1,7 @@
-// Backend bridge with two transports:
-//   • Desktop (Tauri): in-process `invoke`.
-//   • Browser (served by skill-server, e.g. backend in WSL2): `fetch('/api/...')`.
-// Auto-detected at runtime. YAML parse/validate stays here in TS (lib/skill).
-import { invoke, Channel } from "@tauri-apps/api/core";
+// Backend bridge: the frontend reaches every capability over HTTP/JSON (+ SSE for
+// streaming) at `/api/*`, served by skill-server on the same origin as the SPA —
+// a loopback server locally, an SSH-tunnelled one remotely. There is no second
+// transport. YAML parse/validate stays here in TS (lib/skill).
 import {
   parseSkillMd,
   serializeSkillMd,
@@ -13,10 +12,6 @@ import {
 } from "@/lib/skill";
 import type { SkillData, FileData, TreeNode } from "@/lib/types";
 import { isBootstrapSkill } from "@/lib/agents";
-
-/** True when running inside the Tauri desktop shell (vs a plain browser). */
-export const isTauri =
-  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 // Same-origin by default (server serves the UI + /api). Override for dev with
 // VITE_API_BASE (e.g. point a Vite dev server at a remote skill-server).
@@ -45,26 +40,18 @@ interface RawSkill {
 }
 
 // --- raw command transports ---
-const readSkillRaw = (path: string) =>
-  isTauri ? invoke<RawSkill>("read_skill", { path }) : http<RawSkill>("POST", "read-skill", { path });
+const readSkillRaw = (path: string) => http<RawSkill>("POST", "read-skill", { path });
 
-export const readFile = (root: string, rel: string) =>
-  isTauri ? invoke<FileData>("read_file", { root, rel }) : http<FileData>("POST", "read-file", { root, rel });
+export const readFile = (root: string, rel: string) => http<FileData>("POST", "read-file", { root, rel });
 
 export const writeFile = (root: string, rel: string, content: string) =>
-  isTauri
-    ? invoke<void>("write_file", { root, rel, content })
-    : http<void>("POST", "write-file", { root, rel, content });
+  http<void>("POST", "write-file", { root, rel, content });
 
 const readImage = (root: string, rel: string) =>
-  isTauri
-    ? invoke<{ mime: string; base64: string }>("read_image_base64", { root, rel })
-    : http<{ mime: string; base64: string }>("POST", "read-image", { root, rel });
+  http<{ mime: string; base64: string }>("POST", "read-image", { root, rel });
 
 export async function discoverSkills(): Promise<AgentSkills[]> {
-  const groups = isTauri
-    ? await invoke<AgentSkills[]>("discover_skills")
-    : await http<AgentSkills[]>("GET", "discover");
+  const groups = await http<AgentSkills[]>("GET", "discover");
   // The bundled "skill-studio" activation skill ships with the app and installs
   // into a personal dir, so discovery tags it "personal". Re-tag it "studio" so
   // it keeps its folder name but tucks into the bundled dropdown (with a "Skill
@@ -119,15 +106,11 @@ export async function imageDataUrl(root: string, rel: string): Promise<string> {
 }
 
 /**
- * Export the skill as a .zip — native save dialog (desktop) or browser download.
+ * Export the skill as a .zip via a `/api/download` link (browser download).
  * `vars` (declared env names present in the store) bundles their values as a
  * `.env` so the recipient can run it immediately; empty means declaration-only.
  */
 export async function exportZip(root: string, vars: string[] = []): Promise<void> {
-  if (isTauri) {
-    await invoke<boolean>("export_skill_zip", { root, envVars: vars });
-    return;
-  }
   const q = new URLSearchParams({ root });
   if (vars.length) q.set("vars", vars.join(","));
   const a = document.createElement("a");
@@ -139,15 +122,9 @@ export async function exportZip(root: string, vars: string[] = []): Promise<void
 }
 
 /** Scan the skill's files for which managed secrets it references (auto-detect). */
-export const detectRequiredEnv = (root: string) =>
-  isTauri
-    ? invoke<string[]>("detect_required_env", { root })
-    : http<string[]>("POST", "detect-required-env", { root });
+export const detectRequiredEnv = (root: string) => http<string[]>("POST", "detect-required-env", { root });
 
-/** Native folder dialog — desktop only (browser uses the FolderPicker modal + listDir). */
-export const pickSkillFolder = () => invoke<string | null>("pick_skill_folder");
-
-// --- remote folder browsing (browser mode) ---
+// --- folder browsing (server-side; backs the in-app FolderPicker) ---
 export interface DirEntry {
   name: string;
   isDir: boolean;
@@ -200,12 +177,9 @@ export interface SyncResult {
   dest: string;
   linked: boolean;
 }
-export const syncTargets = (root: string) =>
-  isTauri ? invoke<SyncTarget[]>("sync_targets", { root }) : http<SyncTarget[]>("POST", "sync-targets", { root });
+export const syncTargets = (root: string) => http<SyncTarget[]>("POST", "sync-targets", { root });
 export const syncSkill = (root: string, target: string, overwrite: boolean, link: boolean) =>
-  isTauri
-    ? invoke<SyncResult>("sync_skill", { root, target, overwrite, link })
-    : http<SyncResult>("POST", "sync-skill", { root, target, overwrite, link });
+  http<SyncResult>("POST", "sync-skill", { root, target, overwrite, link });
 
 // --- create a brand-new skill ---
 export interface SkillHome {
@@ -217,8 +191,7 @@ export interface SkillHome {
   /** Agent display names this location serves. */
   reaches: string[];
 }
-export const skillHomes = () =>
-  isTauri ? invoke<SkillHome[]>("skill_homes") : http<SkillHome[]>("GET", "skill-homes");
+export const skillHomes = () => http<SkillHome[]>("GET", "skill-homes");
 
 /** A starter SKILL.md body: heading + the canonical Overview/When-to-use/Instructions skeleton. */
 function starterBody(name: string): string {
@@ -249,9 +222,7 @@ function starterBody(name: string): string {
  */
 export async function createSkill(target: string, name: string, description: string): Promise<string> {
   const content = serializeSkillMd({ name, description }, starterBody(name));
-  return isTauri
-    ? invoke<string>("create_skill", { target, name, content })
-    : http<string>("POST", "create-skill", { target, name, content });
+  return http<string>("POST", "create-skill", { target, name, content });
 }
 
 // --- import an existing skill (folder or .zip) into a chosen skill home ---
@@ -275,20 +246,11 @@ export interface ImportResult {
   env: ImportedSecret[];
 }
 
-/** Native file picker for a `.zip` (desktop only; browser uses a file input). */
-export const pickZipFile = () => invoke<string | null>("pick_zip_file");
-
 /** Copy an existing skill folder (by absolute path) into the chosen home. */
 export const importSkillFolder = (source: string, target: string, overwrite: boolean) =>
-  isTauri
-    ? invoke<ImportResult>("import_skill_folder", { source, target, overwrite })
-    : http<ImportResult>("POST", "import-folder", { source, target, overwrite });
+  http<ImportResult>("POST", "import-folder", { source, target, overwrite });
 
-/** Desktop: import from a `.zip` on disk (the backend reads the path). */
-export const importSkillZipPath = (path: string, target: string, overwrite: boolean) =>
-  invoke<ImportResult>("import_skill_zip", { path, target, overwrite });
-
-/** Browser: import from an uploaded `.zip` (base64 bytes, decoded server-side). */
+/** Import from an uploaded `.zip` (base64 bytes, decoded server-side). */
 export const importSkillZipUpload = (data: string, target: string, overwrite: boolean) =>
   http<ImportResult>("POST", "import-zip", { data, target, overwrite });
 
@@ -297,8 +259,7 @@ export interface DeleteResult {
   removed: string;
   wasLink: boolean;
 }
-export const deleteSkill = (root: string) =>
-  isTauri ? invoke<DeleteResult>("delete_skill", { root }) : http<DeleteResult>("POST", "delete-skill", { root });
+export const deleteSkill = (root: string) => http<DeleteResult>("POST", "delete-skill", { root });
 
 // --- accept a proposed (generated-skills) skill: promote it into the real home ---
 export interface PromoteResult {
@@ -307,8 +268,7 @@ export interface PromoteResult {
 }
 /** Accept a proposed skill — move it out of its `generated-skills/` staging folder
  *  up into the real skills home, turning it into an ordinary skill. */
-export const promoteSkill = (root: string) =>
-  isTauri ? invoke<PromoteResult>("promote_skill", { root }) : http<PromoteResult>("POST", "promote-skill", { root });
+export const promoteSkill = (root: string) => http<PromoteResult>("POST", "promote-skill", { root });
 
 // --- per-skill git version control ---
 export interface GitInfo {
@@ -369,8 +329,7 @@ export interface GitCommitDetail {
   /** 1-based version number (this commit's position in linear history). */
   number: number;
 }
-export const gitInfo = (root: string) =>
-  isTauri ? invoke<GitInfo>("git_info", { root }) : http<GitInfo>("POST", "git-info", { root });
+export const gitInfo = (root: string) => http<GitInfo>("POST", "git-info", { root });
 /** One skill root's uncommitted-changes flag (from the batch [`gitDirtyMany`]). */
 export interface DirtyState {
   root: string;
@@ -378,18 +337,11 @@ export interface DirtyState {
 }
 /** Batch "has uncommitted changes?" for the home page — one cheap status check per
  *  skill root, scoped to its own folder. Roots not under git report `dirty: false`. */
-export const gitDirtyMany = (roots: string[]) =>
-  isTauri
-    ? invoke<DirtyState[]>("git_dirty_many", { roots })
-    : http<DirtyState[]>("POST", "git-dirty-many", { roots });
-export const gitInit = (root: string) =>
-  isTauri ? invoke<GitInfo>("git_init", { root }) : http<GitInfo>("POST", "git-init", { root });
+export const gitDirtyMany = (roots: string[]) => http<DirtyState[]>("POST", "git-dirty-many", { roots });
+export const gitInit = (root: string) => http<GitInfo>("POST", "git-init", { root });
 export const gitCommit = (root: string, message: string) =>
-  isTauri
-    ? invoke<{ sha: string; summary: string }>("git_commit", { root, message })
-    : http<{ sha: string; summary: string }>("POST", "git-commit", { root, message });
-export const gitLog = (root: string, limit = 20) =>
-  isTauri ? invoke<GitCommit[]>("git_log", { root, limit }) : http<GitCommit[]>("POST", "git-log", { root, limit });
+  http<{ sha: string; summary: string }>("POST", "git-commit", { root, message });
+export const gitLog = (root: string, limit = 20) => http<GitCommit[]>("POST", "git-log", { root, limit });
 
 // --- on-device commit-message generation (local llama.cpp engine) ---
 /** Whether the on-device model is downloaded yet, so the UI can warn about the
@@ -406,58 +358,33 @@ export interface CommitModelStatus {
 }
 /** Draft a Conventional-Commits message from the skill's uncommitted diff,
  *  fully on-device. The first call may download the model + warm the engine. */
-export const generateCommitMessage = (root: string) =>
-  isTauri
-    ? invoke<string>("generate_commit_message", { root })
-    : http<string>("POST", "generate-commit-message", { root });
+export const generateCommitMessage = (root: string) => http<string>("POST", "generate-commit-message", { root });
 /** Force a fresh draft (the manual ✨ Generate button): ignores the cache and
  *  varies the seed, so each click offers a different phrasing. */
-export const regenerateCommitMessage = (root: string) =>
-  isTauri
-    ? invoke<string>("regenerate_commit_message", { root })
-    : http<string>("POST", "regenerate-commit-message", { root });
-export const commitModelStatus = () =>
-  isTauri
-    ? invoke<CommitModelStatus>("commit_model_status")
-    : http<CommitModelStatus>("GET", "commit-model-status");
+export const regenerateCommitMessage = (root: string) => http<string>("POST", "regenerate-commit-message", { root });
+export const commitModelStatus = () => http<CommitModelStatus>("GET", "commit-model-status");
 /** A draft already prepared in the background for `root`'s current diff, or null
  *  when none is ready. Instant — never runs the model. Used to pre-fill the Save
  *  dialog from the eagerly-generated message. */
-export const peekCommitMessage = (root: string) =>
-  isTauri
-    ? invoke<string | null>("peek_commit_message", { root })
-    : http<string | null>("POST", "peek-commit-message", { root });
-export const gitStatus = (root: string) =>
-  isTauri ? invoke<GitFileChange[]>("git_status", { root }) : http<GitFileChange[]>("POST", "git-status", { root });
-export const gitWorktreeDiff = (root: string) =>
-  isTauri
-    ? invoke<GitWorktreeDiff>("git_worktree_diff", { root })
-    : http<GitWorktreeDiff>("POST", "git-worktree-diff", { root });
+export const peekCommitMessage = (root: string) => http<string | null>("POST", "peek-commit-message", { root });
+export const gitStatus = (root: string) => http<GitFileChange[]>("POST", "git-status", { root });
+export const gitWorktreeDiff = (root: string) => http<GitWorktreeDiff>("POST", "git-worktree-diff", { root });
 export const gitCommitDiff = (root: string, sha: string) =>
-  isTauri
-    ? invoke<GitCommitDetail>("git_commit_diff", { root, sha })
-    : http<GitCommitDetail>("POST", "git-commit-diff", { root, sha });
+  http<GitCommitDetail>("POST", "git-commit-diff", { root, sha });
 /** The file's content at a revision ("HEAD" or a SHA) — the "original" the
  *  in-editor diff overlay compares against. Empty string when absent at that rev. */
 export const gitFileAt = (root: string, rev: string, path: string) =>
-  isTauri
-    ? invoke<string>("git_file_at", { root, rev, path })
-    : http<string>("POST", "git-file-at", { root, rev, path });
+  http<string>("POST", "git-file-at", { root, rev, path });
 /** The tracked file paths at a revision (a SHA or "HEAD") — for browsing a past
  *  version's files. */
-export const gitFilesAt = (root: string, rev: string) =>
-  isTauri ? invoke<string[]>("git_files_at", { root, rev }) : http<string[]>("POST", "git-files-at", { root, rev });
+export const gitFilesAt = (root: string, rev: string) => http<string[]>("POST", "git-files-at", { root, rev });
 /** Discard one path's working-tree changes back to HEAD (tracked → restore,
  *  untracked → delete). Destructive — confirm before calling. */
 export const gitDiscard = (root: string, path: string) =>
-  isTauri
-    ? invoke<void>("git_discard", { root, path })
-    : http<{ ok: boolean }>("POST", "git-discard", { root, path }).then(() => {});
+  http<{ ok: boolean }>("POST", "git-discard", { root, path }).then(() => {});
 /** Discard ALL uncommitted changes back to HEAD. Destructive — confirm first. */
 export const gitDiscardAll = (root: string) =>
-  isTauri
-    ? invoke<void>("git_discard_all", { root })
-    : http<{ ok: boolean }>("POST", "git-discard-all", { root }).then(() => {});
+  http<{ ok: boolean }>("POST", "git-discard-all", { root }).then(() => {});
 
 // --- version preview (view/edit a past version through the full editor) ---
 /** Returned when entering version preview. */
@@ -472,19 +399,14 @@ export interface PreviewState {
  *  Editing then autosaves onto it; saving makes a new linear version. Own-repo
  *  personal skills only. */
 export const gitEnterVersion = (root: string, sha: string) =>
-  isTauri
-    ? invoke<PreviewState>("git_enter_version", { root, sha })
-    : http<PreviewState>("POST", "git-enter-version", { root, sha });
+  http<PreviewState>("POST", "git-enter-version", { root, sha });
 /** Leave version preview: reattach to the branch and restore the set-aside work
  *  (discarding any unsaved preview edits). Returns fresh GitInfo. */
-export const gitExitVersion = (root: string) =>
-  isTauri ? invoke<GitInfo>("git_exit_version", { root }) : http<GitInfo>("POST", "git-exit-version", { root });
+export const gitExitVersion = (root: string) => http<GitInfo>("POST", "git-exit-version", { root });
 /** Save the previewed/edited version as a NEW version on the branch tip (linear
  *  history); the set-aside work is discarded. */
 export const gitKeepVersion = (root: string, message: string) =>
-  isTauri
-    ? invoke<{ sha: string; summary: string }>("git_keep_version", { root, message })
-    : http<{ sha: string; summary: string }>("POST", "git-keep-version", { root, message });
+  http<{ sha: string; summary: string }>("POST", "git-keep-version", { root, message });
 
 // --- secret manager (machine-local env vars for skills) ---
 export interface SecretEntry {
@@ -511,16 +433,11 @@ export interface SetupResult {
   installedAgents: string[];
   skillInstalled: boolean;
 }
-export const secretsStatus = () =>
-  isTauri ? invoke<SecretsStatus>("secrets_status") : http<SecretsStatus>("GET", "secrets-status");
-export const secretsList = () =>
-  isTauri ? invoke<SecretEntry[]>("secrets_list") : http<SecretEntry[]>("GET", "secrets-list");
-export const secretSet = (key: string, value: string) =>
-  isTauri ? invoke<void>("secret_set", { key, value }) : http<void>("POST", "secret-set", { key, value });
-export const secretDelete = (key: string) =>
-  isTauri ? invoke<void>("secret_delete", { key }) : http<void>("POST", "secret-delete", { key });
-export const secretsSetup = () =>
-  isTauri ? invoke<SetupResult>("secrets_setup") : http<SetupResult>("POST", "secrets-setup");
+export const secretsStatus = () => http<SecretsStatus>("GET", "secrets-status");
+export const secretsList = () => http<SecretEntry[]>("GET", "secrets-list");
+export const secretSet = (key: string, value: string) => http<void>("POST", "secret-set", { key, value });
+export const secretDelete = (key: string) => http<void>("POST", "secret-delete", { key });
+export const secretsSetup = () => http<SetupResult>("POST", "secrets-setup");
 
 // --- app-managed agent terminals (tmux-backed; survive UI disconnect) ---
 
@@ -565,16 +482,11 @@ export interface CreateTermArgs {
   extraArgs: string[];
 }
 
-export const terminalAgents = () =>
-  isTauri ? invoke<AgentOption[]>("terminal_agents") : http<AgentOption[]>("GET", "terminal/agents");
-export const terminalList = () =>
-  isTauri ? invoke<TermSession[]>("terminal_list") : http<TermSession[]>("GET", "terminal/list");
-export const terminalCreate = (a: CreateTermArgs) =>
-  isTauri
-    ? invoke<TermSession>("terminal_create", { ...a })
-    : http<TermSession>("POST", "terminal/create", { ...a });
+export const terminalAgents = () => http<AgentOption[]>("GET", "terminal/agents");
+export const terminalList = () => http<TermSession[]>("GET", "terminal/list");
+export const terminalCreate = (a: CreateTermArgs) => http<TermSession>("POST", "terminal/create", { ...a });
 export const terminalKill = (id: string) =>
-  isTauri ? invoke<void>("terminal_kill", { id }) : http<{ ok: boolean }>("POST", "terminal/kill", { id }).then(() => {});
+  http<{ ok: boolean }>("POST", "terminal/kill", { id }).then(() => {});
 
 // base64 ↔ bytes for the text-only transports (SSE data: frames / JSON input).
 function bytesToB64(bytes: Uint8Array): string {
@@ -601,8 +513,8 @@ export interface TerminalHandle {
 }
 
 /**
- * Attach to a session and stream its output. Desktop uses a Tauri Channel +
- * commands; browser uses SSE for output (auto-reconnecting) + POST for input.
+ * Attach to a session and stream its output: SSE for output (auto-reconnecting)
+ * + POST for input. Detaching keeps the (tmux-backed) session alive.
  */
 export function attachTerminal(
   id: string,
@@ -614,16 +526,6 @@ export function attachTerminal(
     onClose?: () => void;
   },
 ): TerminalHandle {
-  if (isTauri) {
-    const channel = new Channel<string>();
-    channel.onmessage = (b64) => opts.onData(b64ToBytes(b64));
-    void invoke("terminal_attach", { id, cols: opts.cols, rows: opts.rows, onEvent: channel });
-    return {
-      write: (data) => void invoke("terminal_write", { id, data: strToB64(data) }),
-      resize: (cols, rows) => void invoke("terminal_resize", { id, cols, rows }),
-      detach: () => void invoke("terminal_detach", { id }),
-    };
-  }
   const q = new URLSearchParams({ id, cols: String(opts.cols), rows: String(opts.rows) });
   const es = new EventSource(`${API_BASE}/api/terminal/attach?${q.toString()}`);
   let closed = false;
