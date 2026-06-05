@@ -564,7 +564,7 @@ pub fn git_discard(root: &str, path: &str) -> Result<(), String> {
             git(&root_path, &["checkout", "HEAD", "--", path])?
         }
     } else {
-        git(&root_path, &["clean", "-f", "--", path])? // untracked → remove
+        git(&root_path, &["clean", "-f", "--", path])?
     };
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());

@@ -196,11 +196,6 @@ fn debug_log(root: &str, messages: &[ChatMessage], raw: &str, final_msg: &str) {
     }
 }
 
-// The prompt is deliberately minimal: a single user message of "Generate a commit
-// message for the following git diff:" + the raw worktree diff, truncated to
-// `MAX_PROMPT_DIFF_BYTES` on a line boundary. No system prompt, few-shot, recent
-// subjects, or per-file summary — see `generate`.
-
 fn truncate_on_boundary(s: &str, max: usize) -> &str {
     if s.len() <= max {
         return s;

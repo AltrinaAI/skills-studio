@@ -408,20 +408,26 @@ fn spawn_one(
     }
 }
 
-/// Spawn the engine, deciding GPU-vs-CPU up front. When a GPU backend is selected
-/// we try it first under a tight timeout, then fall back to CPU. When none is
-/// selected (GPU disabled, non-NVIDIA, or no CUDA runtime) we spawn straight to
-/// CPU with `-ngl 0` — authoritative even though ggml may auto-load a sibling CUDA
-/// backend, since 0 layers offload. Only the GPU attempt is retried on CPU; a
-/// pure-CPU failure surfaces immediately rather than re-running an identical spawn.
+/// Spawn the engine, deciding GPU-vs-CPU up front via `gpu::gpu_plan()`:
+///   - macOS (`BuiltIn`): `-ngl auto` so the engine's compiled-in Metal backend is
+///     used — no bridge.
+///   - NVIDIA Linux/Windows (`Cuda`): `-ngl auto` plus the bundled CUDA bridge and
+///     the user's CUDA runtime on the loader path.
+///   - everything else (`Cpu`: GPU disabled, non-NVIDIA, no CUDA runtime): spawn
+///     straight to `-ngl 0` — authoritative even if ggml auto-loads a sibling CUDA
+///     backend, since 0 layers offload.
+/// The GPU attempts run under a tight timeout and fall back to CPU; a pure-CPU
+/// failure surfaces immediately rather than re-running an identical spawn.
 fn spawn_engine(model: &PathBuf, ctx: u32) -> Result<Engine, String> {
-    if let Some(gpu) = crate::gpu::usable_gpu_backend() {
-        if let Ok(e) = spawn_one(model, ctx, GPU_NGL, Some(&gpu), GPU_READY_TIMEOUT) {
-            return Ok(e);
+    match crate::gpu::gpu_plan() {
+        crate::gpu::GpuPlan::Cpu => spawn_one(model, ctx, "0", None, READY_TIMEOUT),
+        crate::gpu::GpuPlan::BuiltIn => spawn_one(model, ctx, GPU_NGL, None, GPU_READY_TIMEOUT)
+            .or_else(|_| spawn_one(model, ctx, "0", None, READY_TIMEOUT)),
+        crate::gpu::GpuPlan::Cuda(gpu) => {
+            spawn_one(model, ctx, GPU_NGL, Some(&gpu), GPU_READY_TIMEOUT)
+                .or_else(|_| spawn_one(model, ctx, "0", None, READY_TIMEOUT))
         }
-        // GPU init failed or stalled within the tight deadline → fall back to CPU.
     }
-    spawn_one(model, ctx, "0", None, READY_TIMEOUT)
 }
 
 /// Poll `/health` until it returns 200 (only then is the model loaded and ready)

@@ -28,7 +28,6 @@ function Img({ icon, fallback, size = 16 }: { icon: string; fallback: string; si
   );
 }
 
-/** Icon for a file in the tree. */
 export function FileIcon({ name }: { name: string }) {
   return <Img icon={getIconForFilePath(name)} fallback="document" />;
 }

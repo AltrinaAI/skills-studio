@@ -31,14 +31,41 @@ pub struct GpuBackend {
     pub lib_dirs: Vec<PathBuf>,
 }
 
-/// Resolve a usable GPU backend, or `None` to run on CPU. Cheap and side-effect
-/// free (filesystem checks + one quick `nvidia-smi`), so it's safe to call on the
-/// spawn path — no downloads, never blocks.
-pub fn usable_gpu_backend() -> Option<GpuBackend> {
+/// How to run the engine's GPU offload.
+pub enum GpuPlan {
+    /// CPU only — pass `-ngl 0` (GPU disabled, or no usable GPU on this platform).
+    Cpu,
+    /// GPU via the engine's *built-in* backend — `-ngl auto`, no bridge. macOS:
+    /// Metal is compiled into the prebuilt, so `-ngl auto` uses it directly.
+    BuiltIn,
+    /// GPU via the bundled CUDA bridge — `-ngl auto`, load the bridge + the user's
+    /// CUDA runtime dirs. Linux/Windows with an NVIDIA GPU.
+    Cuda(GpuBackend),
+}
+
+/// Decide how to run: built-in Metal on macOS, CUDA on Linux/Windows when an NVIDIA
+/// GPU + bridge are present, otherwise CPU. `SKILL_STUDIO_DISABLE_GPU=1` forces CPU
+/// everywhere (incl. Metal). Cheap and side-effect free (filesystem checks + one
+/// quick `nvidia-smi`), so it's safe on the spawn path — no downloads, never blocks.
+pub fn gpu_plan() -> GpuPlan {
     if std::env::var_os("SKILL_STUDIO_DISABLE_GPU").is_some() {
-        return None;
+        return GpuPlan::Cpu;
     }
-    let lib_name = backend_lib_name()?; // None on platforms we don't ship a CUDA bridge for (macOS)
+    // macOS ships Metal *inside* the engine — there's no separate backend to load;
+    // `-ngl auto` offloads to it. (We never bundle a CUDA bridge for macOS.)
+    if cfg!(target_os = "macos") {
+        return GpuPlan::BuiltIn;
+    }
+    match cuda_backend() {
+        Some(b) => GpuPlan::Cuda(b),
+        None => GpuPlan::Cpu,
+    }
+}
+
+/// The bundled CUDA bridge + the user's CUDA runtime dirs, when usable (NVIDIA GPU
+/// present and the bridge is bundled). `None` → no CUDA GPU. Linux/Windows only.
+fn cuda_backend() -> Option<GpuBackend> {
+    let lib_name = backend_lib_name()?; // None where we ship no CUDA bridge (macOS)
     if !nvidia_present() {
         return None;
     }
@@ -220,10 +247,20 @@ mod tests {
 
     #[test]
     fn disabled_env_forces_cpu() {
-        // Can't toggle process env safely in parallel tests; just assert the gate
-        // logic compiles and the override path is wired.
+        // Can't toggle process env safely in parallel tests; assert the gate when
+        // it happens to be set.
         if std::env::var_os("SKILL_STUDIO_DISABLE_GPU").is_some() {
-            assert!(usable_gpu_backend().is_none());
+            assert!(matches!(gpu_plan(), GpuPlan::Cpu));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_uses_builtin_metal() {
+        // Metal is compiled into the macOS engine: the plan must be BuiltIn (so we
+        // pass `-ngl auto`), never Cpu, unless GPU is explicitly disabled.
+        if std::env::var_os("SKILL_STUDIO_DISABLE_GPU").is_none() {
+            assert!(matches!(gpu_plan(), GpuPlan::BuiltIn));
         }
     }
 
