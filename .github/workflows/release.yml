@@ -152,6 +152,10 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GitHub runners lack FUSE, so AppImage's bundler (linuxdeploy / appimagetool)
+          # fails to mount its tools ("failed to run linuxdeploy"). This makes them
+          # self-extract and run without FUSE. No-op on macOS/Windows.
+          APPIMAGE_EXTRACT_AND_RUN: "1"
           # macOS signing / notarization (add as repo secrets when ready):
           # APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
           # APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
@@ -161,11 +165,16 @@ jobs:
           releaseName: "Agent Skill Studio ${{ github.ref_name }}"
           releaseDraft: true
           prerelease: false
-          # Windows ships UNSIGNED for now (no code-signing certificate yet): --no-sign makes
-          # tauri skip signing entirely. To enable signing once a cert is provisioned, drop the
-          # `--no-sign` branch below — the bundle.windows.signCommand + scripts/sign-windows.ps1
-          # are kept in place. (&& / || precedence: each `A && B` is evaluated before the `||`s.)
-          args: ${{ matrix.platform == 'macos-15-intel' && '--target x86_64-apple-darwin' || matrix.platform == 'windows-latest' && '--no-sign' || '' }}
+          # Per-platform args (&& / || precedence: each `A && B` resolves before the `||`s):
+          #  • Linux → `--bundles deb`: ship only the .deb and SKIP AppImage. Tauri's
+          #    AppImage bundler (linuxdeploy) is currently flaky on GitHub runners — it
+          #    fails even with APPIMAGE_EXTRACT_AND_RUN=1 (upstream tauri#14796, open) —
+          #    and a failed AppImage fails the whole job, so the working .deb never
+          #    uploads. The .deb is a fine Ubuntu/Debian installer; re-enable AppImage by
+          #    dropping this branch once upstream is fixed (the env var above is kept ready).
+          #  • Windows ships UNSIGNED for now (no cert): --no-sign skips signing entirely.
+          #    Re-enable by dropping the `--no-sign` branch (signCommand + script are kept).
+          args: ${{ matrix.platform == 'macos-15-intel' && '--target x86_64-apple-darwin' || matrix.platform == 'windows-latest' && '--no-sign' || startsWith(matrix.platform, 'ubuntu') && '--bundles deb' || '' }}
 
   # Standalone `skill-server` binaries for the Remote-SSH feature. The desktop app
   # provisions one onto a remote host on demand (VS Code-style: the remote curls it,
