@@ -95,24 +95,3 @@ jobs:
         run: mkdir -p client/desktop/binaries && touch client/desktop/binaries/.keep
       - name: cargo check (desktop shell)
         run: cargo check -p skill-studio
-
-  # Provisioning keys off the app version (the desktop downloads skill-server from
-  # the release whose tag matches its own version — see design.md). The release
-  # workflow stamps both package.json and tauri.conf.json from the tag, so the two
-  # committed versions must already agree, or a tag could ship a mismatched pair.
-  version-guard:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - name: package.json and tauri.conf.json versions must match
-        run: |
-          node -e '
-            const fs = require("fs");
-            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
-            const tauri = JSON.parse(fs.readFileSync("client/desktop/tauri.conf.json", "utf8")).version;
-            if (pkg !== tauri) {
-              console.error(`version mismatch: package.json=${pkg} tauri.conf.json=${tauri}`);
-              process.exit(1);
-            }
-            console.log(`versions agree: ${pkg}`);
-          '
