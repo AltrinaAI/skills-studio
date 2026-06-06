@@ -36,16 +36,29 @@ fn main() {
     // Prefer the token from the env (SKILL_STUDIO_SERVER_TOKEN) — the desktop delivers
     // it that way so it stays off the world-readable command line; `--token` still
     // works for manual/standalone use and overrides the env.
-    let mut token: Option<String> =
-        std::env::var("SKILL_STUDIO_SERVER_TOKEN").ok().filter(|t| !t.is_empty());
+    let mut token: Option<String> = std::env::var("SKILL_STUDIO_SERVER_TOKEN")
+        .ok()
+        .filter(|t| !t.is_empty());
     let mut lifeline_stdin = false;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
-            "--host" => { i += 1; host = args.get(i).cloned().unwrap_or(host); }
-            "--port" => { i += 1; port = args.get(i).and_then(|p| p.parse().ok()).unwrap_or(port); }
-            "--dist" => { i += 1; dist = args.get(i).cloned().unwrap_or(dist); }
-            "--token" => { i += 1; token = args.get(i).cloned().filter(|t| !t.is_empty()); }
+            "--host" => {
+                i += 1;
+                host = args.get(i).cloned().unwrap_or(host);
+            }
+            "--port" => {
+                i += 1;
+                port = args.get(i).and_then(|p| p.parse().ok()).unwrap_or(port);
+            }
+            "--dist" => {
+                i += 1;
+                dist = args.get(i).cloned().unwrap_or(dist);
+            }
+            "--token" => {
+                i += 1;
+                token = args.get(i).cloned().filter(|t| !t.is_empty());
+            }
             "--lifeline-stdin" => lifeline_stdin = true,
             _ => {}
         }
@@ -61,7 +74,9 @@ fn main() {
     // to ssh outward). The desktop wires the SAME manager into its in-process server.
     let is_loopback = matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1");
     let remote: Option<std::sync::Arc<dyn RemoteControl>> = if !lifeline_stdin && is_loopback {
-        Some(std::sync::Arc::new(SshRemoteControl::new(env!("CARGO_PKG_VERSION").to_string())))
+        Some(std::sync::Arc::new(SshRemoteControl::new(
+            env!("CARGO_PKG_VERSION").to_string(),
+        )))
     } else {
         None
     };
@@ -91,11 +106,18 @@ fn main() {
         let _ = writeln!(out, "SKILL_SERVER_READY port={}", handle.addr.port());
         let _ = out.flush();
     }
-    println!("skill-server listening on {}  (dist: {})", handle.url(), dist.display());
+    println!(
+        "skill-server listening on {}  (dist: {})",
+        handle.url(),
+        dist.display()
+    );
     if !dist.join("index.html").is_file() {
         // Remote installs serve no UI (the desktop's local server does), so this is
         // expected there; it only matters for a standalone browser-local run.
-        println!("  note: {} has no index.html — the UI is served by the client.", dist.display());
+        println!(
+            "  note: {} has no index.html — the UI is served by the client.",
+            dist.display()
+        );
     }
 
     // Tie our lifetime to the SSH session: the desktop launches us as `ssh … 'exec

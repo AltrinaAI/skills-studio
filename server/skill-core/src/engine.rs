@@ -84,7 +84,9 @@ pub fn model_status() -> ModelStatus {
         model: spec.id.to_string(),
         downloaded,
         size_mb,
-        path: path.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
+        path: path
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default(),
     }
 }
 
@@ -99,7 +101,8 @@ fn model_dir() -> Result<PathBuf, String> {
             return Ok(PathBuf::from(d));
         }
     }
-    let base = dirs::data_dir().ok_or_else(|| "Cannot locate a data directory for models.".to_string())?;
+    let base =
+        dirs::data_dir().ok_or_else(|| "Cannot locate a data directory for models.".to_string())?;
     Ok(base.join("skill-studio").join("models"))
 }
 
@@ -117,7 +120,10 @@ fn ensure_model() -> Result<PathBuf, String> {
             return if path.exists() {
                 Ok(path)
             } else {
-                Err(format!("SKILL_STUDIO_COMMIT_MODEL_PATH does not exist: {}", path.display()))
+                Err(format!(
+                    "SKILL_STUDIO_COMMIT_MODEL_PATH does not exist: {}",
+                    path.display()
+                ))
             };
         }
     }
@@ -168,7 +174,10 @@ fn download_model(spec: &ModelSpec, dest: &PathBuf) -> Result<(), String> {
     let dir = dest.parent().ok_or_else(|| "Bad model path.".to_string())?;
     std::fs::create_dir_all(dir).map_err(|e| format!("Couldn't create model dir: {e}"))?;
 
-    let url = format!("https://huggingface.co/{}/resolve/main/{}", spec.repo, spec.file);
+    let url = format!(
+        "https://huggingface.co/{}/resolve/main/{}",
+        spec.repo, spec.file
+    );
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(20))
         .timeout_read(Duration::from_secs(60))
@@ -179,7 +188,8 @@ fn download_model(spec: &ModelSpec, dest: &PathBuf) -> Result<(), String> {
         .map_err(|e| format!("Couldn't download the model ({}): {e}", spec.id))?;
 
     let part = dest.with_extension("part");
-    let mut out = std::fs::File::create(&part).map_err(|e| format!("Couldn't write model file: {e}"))?;
+    let mut out =
+        std::fs::File::create(&part).map_err(|e| format!("Couldn't write model file: {e}"))?;
     let mut hasher = Sha256::new();
     let mut reader = resp.into_reader();
     let mut buf = vec![0u8; 1 << 20]; // 1 MiB
@@ -204,7 +214,9 @@ fn download_model(spec: &ModelSpec, dest: &PathBuf) -> Result<(), String> {
         let got_hex = got.iter().map(|b| format!("{b:02x}")).collect::<String>();
         if !got_hex.eq_ignore_ascii_case(expected) {
             let _ = std::fs::remove_file(&part);
-            return Err(format!("Model checksum mismatch (expected {expected}, got {got_hex}). Refusing to use it."));
+            return Err(format!(
+                "Model checksum mismatch (expected {expected}, got {got_hex}). Refusing to use it."
+            ));
         }
     }
     std::fs::rename(&part, dest).map_err(|e| format!("Couldn't finalize model file: {e}"))?;
@@ -264,7 +276,11 @@ pub(crate) fn engine_binary() -> PathBuf {
             return PathBuf::from(p);
         }
     }
-    let exe_name = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
+    let exe_name = if cfg!(windows) {
+        "llama-server.exe"
+    } else {
+        "llama-server"
+    };
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let cand = dir.join(exe_name);
@@ -274,7 +290,8 @@ pub(crate) fn engine_binary() -> PathBuf {
         }
     }
     // skill-core's manifest is server/skill-core, so the repo root is two up.
-    let vendored = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../client/desktop/binaries");
+    let vendored =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../client/desktop/binaries");
     if let Some(p) = find_in_dir(&vendored, exe_name) {
         return p;
     }
@@ -290,7 +307,8 @@ fn ensure_executable(bin: &std::path::Path) {
         if let Ok(meta) = std::fs::metadata(bin) {
             let mode = meta.permissions().mode();
             if mode & 0o111 == 0 {
-                let _ = std::fs::set_permissions(bin, std::fs::Permissions::from_mode(mode | 0o755));
+                let _ =
+                    std::fs::set_permissions(bin, std::fs::Permissions::from_mode(mode | 0o755));
             }
         }
     }
@@ -333,12 +351,20 @@ fn add_lib_paths(cmd: &mut Command, dirs: &[PathBuf]) {
         "LD_LIBRARY_PATH"
     };
     let prev = std::env::var(var).unwrap_or_default();
-    cmd.env(var, if prev.is_empty() { joined } else { format!("{joined}{sep}{prev}") });
+    cmd.env(
+        var,
+        if prev.is_empty() {
+            joined
+        } else {
+            format!("{joined}{sep}{prev}")
+        },
+    );
 }
 
 /// Bind to port 0 to let the OS pick a free port, then release it for the child.
 fn free_port() -> Result<u16, String> {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| format!("No free port: {e}"))?;
+    let listener =
+        std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| format!("No free port: {e}"))?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     Ok(port) // listener dropped here → port freed for llama-server
 }
@@ -465,7 +491,10 @@ pub struct ChatMessage {
 
 impl ChatMessage {
     pub fn new(role: &str, content: impl Into<String>) -> Self {
-        ChatMessage { role: role.to_string(), content: content.into() }
+        ChatMessage {
+            role: role.to_string(),
+            content: content.into(),
+        }
     }
 }
 
@@ -485,7 +514,9 @@ pub fn chat(
     let model = ensure_model()?;
     let ctx = active_spec().ctx;
 
-    let mut guard = engine().lock().map_err(|_| "AI engine state is unavailable.".to_string())?;
+    let mut guard = engine()
+        .lock()
+        .map_err(|_| "AI engine state is unavailable.".to_string())?;
     if guard.as_mut().map(|e| e.exited()).unwrap_or(true) {
         *guard = Some(spawn_engine(&model, ctx)?);
     }
@@ -540,7 +571,9 @@ pub fn chat(
         }
     };
 
-    let text = resp.into_string().map_err(|e| format!("Couldn't read the AI response: {e}"))?;
+    let text = resp
+        .into_string()
+        .map_err(|e| format!("Couldn't read the AI response: {e}"))?;
     let json: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("Unexpected AI response: {e}"))?;
     json.get("choices")
@@ -595,6 +628,8 @@ pub fn reap_orphans() {
     #[cfg(windows)]
     {
         // Best-effort on Windows: kill our bundled engine by image name.
-        let _ = Command::new("taskkill").args(["/F", "/IM", "llama-server.exe"]).output();
+        let _ = Command::new("taskkill")
+            .args(["/F", "/IM", "llama-server.exe"])
+            .output();
     }
 }

@@ -68,7 +68,12 @@ pub fn proxy_buffered(mut request: Request, method: &Method, url: &str, target: 
         .headers()
         .iter()
         .filter(|h| !skip_req_header(h.field.as_str().as_str()))
-        .map(|h| (h.field.as_str().as_str().to_string(), h.value.as_str().to_string()))
+        .map(|h| {
+            (
+                h.field.as_str().as_str().to_string(),
+                h.value.as_str().to_string(),
+            )
+        })
         .collect();
     let mut body: Vec<u8> = Vec::new();
     let _ = request.as_reader().read_to_end(&mut body);
@@ -85,7 +90,11 @@ pub fn proxy_buffered(mut request: Request, method: &Method, url: &str, target: 
 
     // ureq returns non-2xx as `Err(Status(code, resp))` — relay it faithfully rather
     // than collapsing every remote 4xx/5xx into a proxy 500.
-    let resp = match if body.is_empty() { req.call() } else { req.send_bytes(&body) } {
+    let resp = match if body.is_empty() {
+        req.call()
+    } else {
+        req.send_bytes(&body)
+    } {
         Ok(r) => r,
         Err(ureq::Error::Status(_, r)) => r,
         Err(ureq::Error::Transport(t)) => {
@@ -110,7 +119,15 @@ pub fn proxy_buffered(mut request: Request, method: &Method, url: &str, target: 
     }
     let mut data = Vec::new();
     let _ = resp.into_reader().read_to_end(&mut data);
-    send_reply(request, Reply { status, body: data, content_type, extra });
+    send_reply(
+        request,
+        Reply {
+            status,
+            body: data,
+            content_type,
+            extra,
+        },
+    );
 }
 
 /// Forward the SSE terminal stream. Mirrors `stream_terminal`: take over the local
@@ -134,7 +151,9 @@ pub fn proxy_sse(request: Request, url: &str, target: &RemoteTarget) {
         .call()
     {
         Ok(r) => r,
-        Err(ureq::Error::Status(code, _)) => return reply_status(request, code, "remote stream error"),
+        Err(ureq::Error::Status(code, _)) => {
+            return reply_status(request, code, "remote stream error")
+        }
         Err(ureq::Error::Transport(_)) => return reply_status(request, 502, "remote unreachable"),
     };
     let mut up = resp.into_reader();
@@ -155,7 +174,7 @@ pub fn proxy_sse(request: Request, url: &str, target: &RemoteTarget) {
     let mut buf = [0u8; 8192];
     loop {
         match up.read(&mut buf) {
-            Ok(0) => break,                // upstream closed
+            Ok(0) => break, // upstream closed
             Ok(n) => {
                 if write_chunk(w.as_mut(), &buf[..n]).is_err() {
                     break; // local client gone

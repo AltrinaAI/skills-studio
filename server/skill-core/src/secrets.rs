@@ -28,11 +28,31 @@ struct Agent {
 }
 
 const AGENTS: [Agent; 5] = [
-    Agent { name: "Claude Code", home_dotdir: ".claude", skill_dirs: &[".claude/skills"] },
-    Agent { name: "Codex", home_dotdir: ".codex", skill_dirs: &[".agents/skills", ".codex/skills"] },
-    Agent { name: "Cursor", home_dotdir: ".cursor", skill_dirs: &[".agents/skills", ".cursor/skills"] },
-    Agent { name: "Gemini CLI", home_dotdir: ".gemini", skill_dirs: &[".agents/skills", ".gemini/skills"] },
-    Agent { name: "OpenClaw", home_dotdir: ".openclaw", skill_dirs: &[".openclaw/skills"] },
+    Agent {
+        name: "Claude Code",
+        home_dotdir: ".claude",
+        skill_dirs: &[".claude/skills"],
+    },
+    Agent {
+        name: "Codex",
+        home_dotdir: ".codex",
+        skill_dirs: &[".agents/skills", ".codex/skills"],
+    },
+    Agent {
+        name: "Cursor",
+        home_dotdir: ".cursor",
+        skill_dirs: &[".agents/skills", ".cursor/skills"],
+    },
+    Agent {
+        name: "Gemini CLI",
+        home_dotdir: ".gemini",
+        skill_dirs: &[".agents/skills", ".gemini/skills"],
+    },
+    Agent {
+        name: "OpenClaw",
+        home_dotdir: ".openclaw",
+        skill_dirs: &[".openclaw/skills"],
+    },
 ];
 
 /// Canonical locations the activation skill is installed into, each gated by the
@@ -44,9 +64,18 @@ struct InstallDest {
 }
 
 const INSTALL_DESTS: [InstallDest; 3] = [
-    InstallDest { skills_rel: ".agents/skills", triggers: &[".agents", ".codex", ".cursor", ".gemini"] },
-    InstallDest { skills_rel: ".claude/skills", triggers: &[".claude"] },
-    InstallDest { skills_rel: ".openclaw/skills", triggers: &[".openclaw"] },
+    InstallDest {
+        skills_rel: ".agents/skills",
+        triggers: &[".agents", ".codex", ".cursor", ".gemini"],
+    },
+    InstallDest {
+        skills_rel: ".claude/skills",
+        triggers: &[".claude"],
+    },
+    InstallDest {
+        skills_rel: ".openclaw/skills",
+        triggers: &[".openclaw"],
+    },
 ];
 
 /// Per-agent legacy dirs now superseded by `.agents/skills`. A stale activation
@@ -124,7 +153,9 @@ fn ensure_dir() -> Result<PathBuf, String> {
 
 fn load_store() -> Result<BTreeMap<String, String>, String> {
     match std::fs::read(store_path()?) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| format!("Corrupt secrets store: {e}")),
+        Ok(bytes) => {
+            serde_json::from_slice(&bytes).map_err(|e| format!("Corrupt secrets store: {e}"))
+        }
         Err(_) => Ok(BTreeMap::new()),
     }
 }
@@ -371,7 +402,12 @@ fn install_bootstrap_skill_in(home: &Path, skill_src: &Path) -> Result<Vec<Strin
     }
     // Once the shared copy is in place, drop superseded per-agent copies so the
     // cohort doesn't see the skill twice (and no stale older copy lingers).
-    if home.join(".agents/skills").join(BOOTSTRAP_SKILL).join("SKILL.md").exists() {
+    if home
+        .join(".agents/skills")
+        .join(BOOTSTRAP_SKILL)
+        .join("SKILL.md")
+        .exists()
+    {
         for legacy in LEGACY_SUPERSEDED {
             let stale = home.join(legacy).join(BOOTSTRAP_SKILL);
             if stale.exists() {
@@ -447,9 +483,15 @@ mod tests {
         // Shared dir gets the copy; Claude Code gets its own; stale legacy cleared.
         assert!(home.join(".agents/skills/skill-studio/SKILL.md").exists());
         assert!(home.join(".claude/skills/skill-studio/SKILL.md").exists());
-        assert!(!stale.exists(), "stale ~/.codex/skills copy must be cleared");
+        assert!(
+            !stale.exists(),
+            "stale ~/.codex/skills copy must be cleared"
+        );
         assert!(!home.join(".codex/skills/skill-studio").exists());
-        assert!(covered.iter().any(|a| a == "Codex"), "Codex covered via shared dir");
+        assert!(
+            covered.iter().any(|a| a == "Codex"),
+            "Codex covered via shared dir"
+        );
         assert!(covered.iter().any(|a| a == "Claude Code"));
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -469,7 +511,10 @@ mod tests {
         let got = parse_dotenv(messy);
         assert_eq!(
             got,
-            vec![("FOO".to_string(), "bar".to_string()), ("BAZ".to_string(), "q".to_string())]
+            vec![
+                ("FOO".to_string(), "bar".to_string()),
+                ("BAZ".to_string(), "q".to_string())
+            ]
         );
     }
 
@@ -497,7 +542,10 @@ mod tests {
         assert!(render_dotenv(&["MISSING".to_string()]).unwrap().is_empty());
         // A value containing a single quote falls back to double-quoting (dotenv loaders unescape it).
         let dq = render_dotenv(&["OPENAI_API_KEY".to_string()]).unwrap();
-        assert!(dq.contains("OPENAI_API_KEY=\"sk-test'x\""), "single-quote value double-quoted: {dq}");
+        assert!(
+            dq.contains("OPENAI_API_KEY=\"sk-test'x\""),
+            "single-quote value double-quoted: {dq}"
+        );
 
         secret_delete("FOO").unwrap();
         assert_eq!(secrets_list().unwrap().len(), 1);
@@ -505,7 +553,9 @@ mod tests {
 
         // Empty store renders an empty env file (so activate.sh reports "none").
         secret_delete("OPENAI_API_KEY").unwrap();
-        assert!(std::fs::read_to_string(env_path().unwrap()).unwrap().is_empty());
+        assert!(std::fs::read_to_string(env_path().unwrap())
+            .unwrap()
+            .is_empty());
 
         std::env::remove_var("XDG_CONFIG_HOME");
         let _ = std::fs::remove_dir_all(&tmp);

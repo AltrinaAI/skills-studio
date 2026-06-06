@@ -17,16 +17,22 @@ use crate::{RemoteStatus, RemoteTarget};
 use super::{provision, set_stage, State};
 
 const COMMON_OPTS: &[&str] = &[
-    "-o", "BatchMode=yes",
-    "-o", "ConnectTimeout=15",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=15",
     // accept-new = trust-on-first-use: a host not yet in known_hosts is auto-pinned
     // (no prompt under BatchMode), but a CHANGED key is still rejected. Intentional —
     // matches VS Code Remote-SSH's first-contact behaviour; hosts you've ssh'd to
     // before are already pinned in your known_hosts and get full strict checking.
-    "-o", "StrictHostKeyChecking=accept-new",
-    "-o", "ExitOnForwardFailure=yes",
-    "-o", "ServerAliveInterval=15",
-    "-o", "ServerAliveCountMax=3",
+    "-o",
+    "StrictHostKeyChecking=accept-new",
+    "-o",
+    "ExitOnForwardFailure=yes",
+    "-o",
+    "ServerAliveInterval=15",
+    "-o",
+    "ServerAliveCountMax=3",
 ];
 
 /// A live connection: the `ssh` child (lifeline + tunnel) and the forwarded local port.
@@ -70,7 +76,11 @@ pub fn run_connect(state: Arc<Mutex<State>>, host: String, generation: u64, app_
                 base_url: format!("http://127.0.0.1:{}", sess.local_port),
                 token: sess.token.clone(),
             });
-            s.status = RemoteStatus { state: "connected".into(), host: Some(host.clone()), message: None };
+            s.status = RemoteStatus {
+                state: "connected".into(),
+                host: Some(host.clone()),
+                message: None,
+            };
             s.session = Some(sess);
             drop(s);
             // Watch the ssh child: if it dies (network loss, remote crash), clear the
@@ -80,7 +90,11 @@ pub fn run_connect(state: Arc<Mutex<State>>, host: String, generation: u64, app_
         Err(e) => {
             s.target = None;
             s.session = None;
-            s.status = RemoteStatus { state: "error".into(), host: Some(host), message: Some(e) };
+            s.status = RemoteStatus {
+                state: "error".into(),
+                host: Some(host),
+                message: Some(e),
+            };
         }
     }
 }
@@ -89,7 +103,12 @@ pub fn run_connect(state: Arc<Mutex<State>>, host: String, generation: u64, app_
 /// the active session UNLESS a newer connect/disconnect superseded this one (generation
 /// guard). This is what lets the UI recover to Local after a dropped tunnel instead of
 /// proxying to a dead loopback port forever.
-fn spawn_monitor(state: Arc<Mutex<State>>, generation: u64, host: String, child: Arc<Mutex<Child>>) {
+fn spawn_monitor(
+    state: Arc<Mutex<State>>,
+    generation: u64,
+    host: String,
+    child: Arc<Mutex<Child>>,
+) {
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(3));
         // "Still running" is the only non-exit case; Some(status) or a wait error
@@ -115,14 +134,37 @@ fn spawn_monitor(state: Arc<Mutex<State>>, generation: u64, host: String, child:
     });
 }
 
-fn connect_flow(state: &Arc<Mutex<State>>, host: &str, generation: u64, app_version: &str) -> Result<Session, String> {
-    set_stage(state, generation, "detecting", host, "Detecting the remote platform…");
+fn connect_flow(
+    state: &Arc<Mutex<State>>,
+    host: &str,
+    generation: u64,
+    app_version: &str,
+) -> Result<Session, String> {
+    set_stage(
+        state,
+        generation,
+        "detecting",
+        host,
+        "Detecting the remote platform…",
+    );
     let platform = provision::detect(host)?;
 
-    set_stage(state, generation, "installing", host, "Installing skill-server on the remote…");
+    set_stage(
+        state,
+        generation,
+        "installing",
+        host,
+        "Installing skill-server on the remote…",
+    );
     let bin = provision::ensure_installed(host, &platform, app_version)?;
 
-    set_stage(state, generation, "launching", host, "Starting the remote server…");
+    set_stage(
+        state,
+        generation,
+        "launching",
+        host,
+        "Starting the remote server…",
+    );
     let token = new_token();
     let mut last_err = String::new();
     // A few attempts to dodge a remote/local port collision (R is client-chosen).
@@ -133,7 +175,9 @@ fn connect_flow(state: &Arc<Mutex<State>>, host: &str, generation: u64, app_vers
             Err(LaunchError::Fatal(e)) => return Err(e),
         }
     }
-    Err(format!("Could not start the remote server after several attempts. {last_err}"))
+    Err(format!(
+        "Could not start the remote server after several attempts. {last_err}"
+    ))
 }
 
 enum LaunchError {
@@ -167,7 +211,9 @@ fn launch(host: &str, bin: &str, token: &str, attempt: u32) -> Result<Session, L
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| LaunchError::Fatal(format!("failed to run ssh: {e} (is OpenSSH installed?)")))?;
+        .map_err(|e| {
+            LaunchError::Fatal(format!("failed to run ssh: {e} (is OpenSSH installed?)"))
+        })?;
 
     let stdin = child.stdin.take().unwrap(); // HOLD = lifeline
     let stdout = child.stdout.take().unwrap();
@@ -188,7 +234,9 @@ fn launch(host: &str, bin: &str, token: &str, attempt: u32) -> Result<Session, L
         if remaining.is_zero() {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(LaunchError::Fatal(format!("timed out waiting for the remote server on {host}")));
+            return Err(LaunchError::Fatal(format!(
+                "timed out waiting for the remote server on {host}"
+            )));
         }
         match rx.recv_timeout(remaining.min(Duration::from_millis(500))) {
             Ok(line) if is_ready(&line) => {
@@ -227,7 +275,9 @@ fn classify_exit(host: &str, stderr: &str) -> LaunchError {
             "authentication to {host} failed — ensure key-based SSH access (ssh-agent). ssh said: {s}"
         ))
     } else if s.is_empty() {
-        LaunchError::Fatal(format!("the remote server on {host} exited before it was ready"))
+        LaunchError::Fatal(format!(
+            "the remote server on {host} exited before it was ready"
+        ))
     } else {
         LaunchError::Fatal(format!("remote server on {host} failed to start: {s}"))
     }
@@ -235,7 +285,8 @@ fn classify_exit(host: &str, stderr: &str) -> LaunchError {
 
 /// Grab an unused local port by binding `:0`, then release it for ssh to reuse.
 fn free_local_port() -> Result<u16, String> {
-    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("could not allocate a local port: {e}"))?;
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .map_err(|e| format!("could not allocate a local port: {e}"))?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     Ok(port) // listener drops here, freeing the port
 }
@@ -243,8 +294,12 @@ fn free_local_port() -> Result<u16, String> {
 /// Guess a free remote loopback port. R is loopback-only on the remote, so a clash is
 /// rare; `connect_flow` retries with a fresh guess if `skill-server` can't bind.
 fn pick_remote_port(attempt: u32) -> u16 {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
-    let seed = nanos ^ std::process::id().wrapping_mul(2_654_435_761) ^ attempt.wrapping_mul(40_503);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let seed =
+        nanos ^ std::process::id().wrapping_mul(2_654_435_761) ^ attempt.wrapping_mul(40_503);
     20_000 + (seed % 40_000) as u16
 }
 

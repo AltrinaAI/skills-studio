@@ -191,12 +191,18 @@ pub fn resolve_skill_input(input: &str, examples_base: Option<&Path>) -> PathBuf
             return normalize_lexical(c);
         }
     }
-    normalize_lexical(&candidates.into_iter().next().unwrap_or_else(|| PathBuf::from(trimmed)))
+    normalize_lexical(
+        &candidates
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| PathBuf::from(trimmed)),
+    )
 }
 
 /// Read + analyze a skill directory.
 pub fn build_raw_skill(root: &Path) -> Result<RawSkill, String> {
-    let meta = std::fs::metadata(root).map_err(|_| format!("Path not found: {}", root.display()))?;
+    let meta =
+        std::fs::metadata(root).map_err(|_| format!("Path not found: {}", root.display()))?;
     if !meta.is_dir() {
         return Err(format!("Not a directory: {}", root.display()));
     }
@@ -207,7 +213,8 @@ pub fn build_raw_skill(root: &Path) -> Result<RawSkill, String> {
             root.display()
         ));
     }
-    let raw = std::fs::read_to_string(&skill_md).map_err(|e| format!("Failed to read SKILL.md: {e}"))?;
+    let raw =
+        std::fs::read_to_string(&skill_md).map_err(|e| format!("Failed to read SKILL.md: {e}"))?;
 
     let mut acc = BuildAcc {
         files: Vec::new(),
@@ -346,7 +353,8 @@ pub fn list_dir_impl(path: &str) -> Result<DirListing, String> {
 /// the opt-in "bundle secrets" path. Names absent from the store are skipped.
 pub fn zip_skill_bytes(root_input: &str, env_vars: &[String]) -> Result<(String, Vec<u8>), String> {
     let root = resolve_root(root_input);
-    let meta = std::fs::metadata(&root).map_err(|_| format!("Skill not found: {}", root.display()))?;
+    let meta =
+        std::fs::metadata(&root).map_err(|_| format!("Skill not found: {}", root.display()))?;
     if !meta.is_dir() {
         return Err(format!("Skill not found: {}", root.display()));
     }
@@ -401,7 +409,14 @@ fn walk_zip(
             if IGNORED_DIRS.contains(&name.as_str()) {
                 continue;
             }
-            walk_zip(&abs, &format!("{prefix}{name}/"), dir_name, zip, options, total)?;
+            walk_zip(
+                &abs,
+                &format!("{prefix}{name}/"),
+                dir_name,
+                zip,
+                options,
+                total,
+            )?;
         } else if ft.is_file() {
             // Never ship a `.env` from disk — it's secret-bearing, and the opt-in
             // bundle writes an authoritative one (so this also avoids a duplicate
@@ -580,7 +595,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(base.join("scripts")).unwrap();
         std::fs::write(base.join("SKILL.md"), "Reads OPENAI_API_KEY at runtime.").unwrap();
-        std::fs::write(base.join("scripts/run.sh"), "#!/bin/sh\necho \"$GITHUB_TOKEN\"\n").unwrap();
+        std::fs::write(
+            base.join("scripts/run.sh"),
+            "#!/bin/sh\necho \"$GITHUB_TOKEN\"\n",
+        )
+        .unwrap();
         // A near-miss substring must NOT trigger UNUSED_KEY's cousin.
         std::fs::write(base.join("notes.txt"), "see MY_OPENAI_API_KEY_2 elsewhere").unwrap();
 
@@ -590,7 +609,10 @@ mod tests {
             "UNUSED_KEY".to_string(),
         ];
         let found = scan_for_env_vars(&base, &candidates);
-        assert_eq!(found, vec!["GITHUB_TOKEN".to_string(), "OPENAI_API_KEY".to_string()]);
+        assert_eq!(
+            found,
+            vec!["GITHUB_TOKEN".to_string(), "OPENAI_API_KEY".to_string()]
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 }

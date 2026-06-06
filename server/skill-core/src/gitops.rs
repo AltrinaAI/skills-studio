@@ -151,7 +151,9 @@ pub fn git_info(root: &str) -> Result<GitInfo, String> {
     }
     if info.is_repo {
         info.branch = git_ok(&root_path, &["branch", "--show-current"]).filter(|s| !s.is_empty());
-        info.has_remote = git_ok(&root_path, &["remote"]).map(|s| !s.is_empty()).unwrap_or(false);
+        info.has_remote = git_ok(&root_path, &["remote"])
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
     }
     // `dirty` + identity are meaningful for your own repo AND for a skill living
     // inside a parent repo — scope the status to this folder (`-- .`) so changes
@@ -189,7 +191,10 @@ pub fn git_dirty_many(roots: &[String]) -> Vec<DirtyState> {
                 && git_ok(Path::new(r), &["status", "--porcelain", "--", "."])
                     .map(|s| !s.is_empty())
                     .unwrap_or(false);
-            DirtyState { root: r.clone(), dirty }
+            DirtyState {
+                root: r.clone(),
+                dirty,
+            }
         })
         .collect()
 }
@@ -215,7 +220,10 @@ pub fn git_commit(root: &str, message: &str) -> Result<CommitResult, String> {
     if msg.is_empty() {
         return Err("Enter a commit message.".into());
     }
-    if git_ok(&root_path, &["config", "user.email"]).map(|s| s.is_empty()).unwrap_or(true) {
+    if git_ok(&root_path, &["config", "user.email"])
+        .map(|s| s.is_empty())
+        .unwrap_or(true)
+    {
         return Err(
             "No git identity set. Run: git config --global user.email \"you@example.com\" (and user.name).".into(),
         );
@@ -253,7 +261,16 @@ pub fn git_log(root: &str, limit: usize) -> Result<Vec<Commit>, String> {
     // including versions NEWER than the one currently being previewed.
     let href = history_ref(&root_path);
     // Unit-separator (0x1f) between fields; newline between commits.
-    let out = git(&root_path, &["log", "-n", &n, "--pretty=%H%x1f%h%x1f%s%x1f%an%x1f%aI%x1f%ar", &href])?;
+    let out = git(
+        &root_path,
+        &[
+            "log",
+            "-n",
+            &n,
+            "--pretty=%H%x1f%h%x1f%s%x1f%an%x1f%aI%x1f%ar",
+            &href,
+        ],
+    )?;
     if !out.status.success() {
         return Ok(vec![]); // not a repo yet / no commits
     }
@@ -326,7 +343,10 @@ fn classify(code: &str) -> (&'static str, bool, bool) {
 fn parse_status(root: &Path) -> Vec<FileChange> {
     // `-- .` scopes the status to this folder so, when the skill lives inside a
     // larger parent repo, that repo's changes elsewhere don't show up here.
-    let out = match git(root, &["status", "--porcelain=v1", "-z", "-uall", "--", "."]) {
+    let out = match git(
+        root,
+        &["status", "--porcelain=v1", "-z", "-uall", "--", "."],
+    ) {
         Ok(o) if o.status.success() => o.stdout,
         _ => return vec![],
     };
@@ -354,7 +374,13 @@ fn parse_status(root: &Path) -> Vec<FileChange> {
         } else {
             None
         };
-        files.push(FileChange { path, orig_path, kind: kind.to_string(), staged, unstaged });
+        files.push(FileChange {
+            path,
+            orig_path,
+            kind: kind.to_string(),
+            staged,
+            unstaged,
+        });
     }
     files
 }
@@ -402,9 +428,24 @@ pub fn git_worktree_diff(root: &str) -> Result<WorktreeDiff, String> {
         // --relative confines the diff to this folder and rewrites its a/b paths
         // to be skill-relative — so a skill nested in a parent repo diffs cleanly
         // (a no-op when the skill is its own repo and already at the root).
-        if let Ok(out) = git(&root_path, &["-c", "core.quotepath=false", "diff", "--no-color", "-M", "--relative", "HEAD"]) {
+        if let Ok(out) = git(
+            &root_path,
+            &[
+                "-c",
+                "core.quotepath=false",
+                "diff",
+                "--no-color",
+                "-M",
+                "--relative",
+                "HEAD",
+            ],
+        ) {
             if out.status.success() {
-                truncated |= push_capped(&mut diff, &String::from_utf8_lossy(&out.stdout), MAX_DIFF_BYTES);
+                truncated |= push_capped(
+                    &mut diff,
+                    &String::from_utf8_lossy(&out.stdout),
+                    MAX_DIFF_BYTES,
+                );
             }
         }
     }
@@ -419,7 +460,16 @@ pub fn git_worktree_diff(root: &str) -> Result<WorktreeDiff, String> {
         }
         if let Ok(out) = git(
             &root_path,
-            &["-c", "core.quotepath=false", "diff", "--no-index", "--no-color", "--", "/dev/null", &f.path],
+            &[
+                "-c",
+                "core.quotepath=false",
+                "diff",
+                "--no-index",
+                "--no-color",
+                "--",
+                "/dev/null",
+                &f.path,
+            ],
         ) {
             let code = out.status.code().unwrap_or(-1);
             if code == 0 || code == 1 {
@@ -427,14 +477,21 @@ pub fn git_worktree_diff(root: &str) -> Result<WorktreeDiff, String> {
                 // bytes; emit a synthetic new-file header instead of lossy junk.
                 let chunk = match std::str::from_utf8(&out.stdout) {
                     Ok(s) => s.to_string(),
-                    Err(_) => format!("diff --git a/{p} b/{p}\nnew file mode 100644\n--- /dev/null\n+++ b/{p}\n", p = f.path),
+                    Err(_) => format!(
+                        "diff --git a/{p} b/{p}\nnew file mode 100644\n--- /dev/null\n+++ b/{p}\n",
+                        p = f.path
+                    ),
                 };
                 truncated |= push_capped(&mut diff, &chunk, MAX_DIFF_BYTES);
             }
         }
     }
 
-    Ok(WorktreeDiff { files, diff, truncated })
+    Ok(WorktreeDiff {
+        files,
+        diff,
+        truncated,
+    })
 }
 
 /// The worktree's unified diff text only — the input for on-device commit-message
@@ -465,7 +522,12 @@ pub fn git_commit_diff(root: &str, sha: &str) -> Result<CommitDetail, String> {
     // Metadata in one shot: SHA, short, subject, body, author, email, dates.
     let meta = git(
         &root_path,
-        &["show", "-s", "--format=%H%x1f%h%x1f%s%x1f%b%x1f%an%x1f%ae%x1f%aI%x1f%ar", sha],
+        &[
+            "show",
+            "-s",
+            "--format=%H%x1f%h%x1f%s%x1f%b%x1f%an%x1f%ae%x1f%aI%x1f%ar",
+            sha,
+        ],
     )?;
     if !meta.status.success() {
         return Err(String::from_utf8_lossy(&meta.stderr).trim().to_string());
@@ -478,12 +540,19 @@ pub fn git_commit_diff(root: &str, sha: &str) -> Result<CommitDetail, String> {
 
     // The patch on its own. Empty --format suppresses the commit header so we
     // get just the diff; --root makes the first commit diff against nothing.
-    let patch = git(&root_path, &["show", "--no-color", "--format=", "--patch", "--root", sha])?;
+    let patch = git(
+        &root_path,
+        &["show", "--no-color", "--format=", "--patch", "--root", sha],
+    )?;
     if !patch.status.success() {
         return Err(String::from_utf8_lossy(&patch.stderr).trim().to_string());
     }
     let mut diff = String::new();
-    let truncated = push_capped(&mut diff, String::from_utf8_lossy(&patch.stdout).trim_start_matches('\n'), MAX_DIFF_BYTES);
+    let truncated = push_capped(
+        &mut diff,
+        String::from_utf8_lossy(&patch.stdout).trim_start_matches('\n'),
+        MAX_DIFF_BYTES,
+    );
 
     // Version number = commits reachable from this sha (its position in history).
     let number: usize = git_ok(&root_path, &["rev-list", "--count", sha])
@@ -535,12 +604,19 @@ pub fn git_files_at(root: &str, rev: &str) -> Result<Vec<String>, String> {
     if rev != "HEAD" && !is_hex_rev(rev) {
         return Err("Invalid revision.".into());
     }
-    let out = git(&PathBuf::from(root), &["ls-tree", "-r", "--name-only", "-z", rev])?;
+    let out = git(
+        &PathBuf::from(root),
+        &["ls-tree", "-r", "--name-only", "-z", rev],
+    )?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
     let text = String::from_utf8_lossy(&out.stdout);
-    Ok(text.split('\0').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect())
+    Ok(text
+        .split('\0')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect())
 }
 
 /// Discard one path's working-tree changes back to HEAD: a tracked file is
@@ -557,7 +633,10 @@ pub fn git_discard(root: &str, path: &str) -> Result<(), String> {
         .unwrap_or(false);
     let out = if tracked {
         // git >= 2.23: restore index + worktree to HEAD. Fall back to checkout.
-        let r = git(&root_path, &["restore", "--staged", "--worktree", "--", path])?;
+        let r = git(
+            &root_path,
+            &["restore", "--staged", "--worktree", "--", path],
+        )?;
         if r.status.success() {
             r
         } else {
@@ -681,7 +760,10 @@ fn exit_preview(root_path: &Path) -> Result<(), String> {
             let _ = git(root_path, &["checkout", "-f", &branch]);
         }
     }
-    let _ = git(root_path, &["config", "--local", "--unset", PREVIEW_BRANCH_CFG]);
+    let _ = git(
+        root_path,
+        &["config", "--local", "--unset", PREVIEW_BRANCH_CFG],
+    );
     Ok(())
 }
 
@@ -705,9 +787,12 @@ pub fn git_enter_version(root: &str, sha: &str) -> Result<PreviewState, String> 
         return Err("Invalid version reference.".into());
     }
     // Resolve to a real commit object (rejects partial/garbage refs cleanly).
-    let target = git_ok(&root_path, &["rev-parse", "--verify", "-q", &format!("{sha}^{{commit}}")])
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| "That version no longer exists.".to_string())?;
+    let target = git_ok(
+        &root_path,
+        &["rev-parse", "--verify", "-q", &format!("{sha}^{{commit}}")],
+    )
+    .filter(|s| !s.is_empty())
+    .ok_or_else(|| "That version no longer exists.".to_string())?;
 
     // Already mid-preview (detached)? Unwind it first — restores the original work
     // and avoids stacking a second stash on top of the first.
@@ -718,29 +803,58 @@ pub fn git_enter_version(root: &str, sha: &str) -> Result<PreviewState, String> 
     let branch = current_branch(&root_path)
         .ok_or_else(|| "Couldn't determine the current branch to return to.".to_string())?;
     // Remember where to return BEFORE detaching (survives a crash/reload).
-    let _ = git(&root_path, &["config", "--local", PREVIEW_BRANCH_CFG, &branch]);
+    let _ = git(
+        &root_path,
+        &["config", "--local", PREVIEW_BRANCH_CFG, &branch],
+    );
 
     // Set aside uncommitted work (tracked + untracked) so the version shows clean.
-    let dirty = git_ok(&root_path, &["status", "--porcelain"]).map(|s| !s.is_empty()).unwrap_or(false);
+    let dirty = git_ok(&root_path, &["status", "--porcelain"])
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
     let mut stashed = false;
     if dirty {
-        let out = git(&root_path, &["stash", "push", "--include-untracked", "-m", PREVIEW_STASH_MSG])?;
+        let out = git(
+            &root_path,
+            &[
+                "stash",
+                "push",
+                "--include-untracked",
+                "-m",
+                PREVIEW_STASH_MSG,
+            ],
+        )?;
         if !out.status.success() {
-            let _ = git(&root_path, &["config", "--local", "--unset", PREVIEW_BRANCH_CFG]);
+            let _ = git(
+                &root_path,
+                &["config", "--local", "--unset", PREVIEW_BRANCH_CFG],
+            );
             return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
         }
         stashed = find_preview_stash(&root_path).is_some();
     }
 
     // Detach onto the version: the working tree now IS that version, clean.
-    let co = git(&root_path, &["-c", "advice.detachedHead=false", "checkout", "--detach", &target])?;
+    let co = git(
+        &root_path,
+        &[
+            "-c",
+            "advice.detachedHead=false",
+            "checkout",
+            "--detach",
+            &target,
+        ],
+    )?;
     if !co.status.success() {
         let msg = String::from_utf8_lossy(&co.stderr).trim().to_string();
         let _ = exit_preview(&root_path); // never strand the user: restore + reattach
         return Err(msg);
     }
 
-    Ok(PreviewState { stashed, branch: Some(branch) })
+    Ok(PreviewState {
+        stashed,
+        branch: Some(branch),
+    })
 }
 
 /// Leave version preview: discard unsaved preview edits, reattach to the branch we
@@ -763,8 +877,12 @@ pub fn git_keep_version(root: &str, message: &str) -> Result<CommitResult, Strin
     }
     // commit-tree needs BOTH name and email; checking only email would let the
     // guard pass and then fail opaquely ("empty ident name") inside commit-tree.
-    let missing_ident = git_ok(&root_path, &["config", "user.email"]).map(|s| s.is_empty()).unwrap_or(true)
-        || git_ok(&root_path, &["config", "user.name"]).map(|s| s.is_empty()).unwrap_or(true);
+    let missing_ident = git_ok(&root_path, &["config", "user.email"])
+        .map(|s| s.is_empty())
+        .unwrap_or(true)
+        || git_ok(&root_path, &["config", "user.name"])
+            .map(|s| s.is_empty())
+            .unwrap_or(true);
     if missing_ident {
         return Err(
             "No git identity set. Run: git config --global user.email \"you@example.com\" and user.name \"Your Name\".".into(),
@@ -774,30 +892,37 @@ pub fn git_keep_version(root: &str, message: &str) -> Result<CommitResult, Strin
     if current_branch(&root_path).is_some() {
         return git_commit(root, message);
     }
-    let branch = git_ok(&root_path, &["config", "--local", "--get", PREVIEW_BRANCH_CFG])
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            // Marker lost (crash) but a single local branch → unambiguous fallback.
-            let list = git_ok(&root_path, &["branch", "--format=%(refname:short)"]).unwrap_or_default();
-            let mut it = list.lines().filter(|l| !l.is_empty());
-            match (it.next(), it.next()) {
-                (Some(only), None) => Some(only.to_string()),
-                _ => None,
-            }
-        })
-        .ok_or_else(|| "Couldn't determine which branch to save onto.".to_string())?;
+    let branch = git_ok(
+        &root_path,
+        &["config", "--local", "--get", PREVIEW_BRANCH_CFG],
+    )
+    .filter(|s| !s.is_empty())
+    .or_else(|| {
+        // Marker lost (crash) but a single local branch → unambiguous fallback.
+        let list = git_ok(&root_path, &["branch", "--format=%(refname:short)"]).unwrap_or_default();
+        let mut it = list.lines().filter(|l| !l.is_empty());
+        match (it.next(), it.next()) {
+            (Some(only), None) => Some(only.to_string()),
+            _ => None,
+        }
+    })
+    .ok_or_else(|| "Couldn't determine which branch to save onto.".to_string())?;
 
-    let tip = git_ok(&root_path, &["rev-parse", "--verify", &format!("refs/heads/{branch}")])
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| "Couldn't find the current branch tip.".to_string())?;
+    let tip = git_ok(
+        &root_path,
+        &["rev-parse", "--verify", &format!("refs/heads/{branch}")],
+    )
+    .filter(|s| !s.is_empty())
+    .ok_or_else(|| "Couldn't find the current branch tip.".to_string())?;
 
     // Stage the working tree (old version + your edits) and snapshot it as a tree.
     let add = git(&root_path, &["add", "-A"])?;
     if !add.status.success() {
         return Err(String::from_utf8_lossy(&add.stderr).trim().to_string());
     }
-    let tree =
-        git_ok(&root_path, &["write-tree"]).filter(|s| !s.is_empty()).ok_or_else(|| "Couldn't snapshot your changes.".to_string())?;
+    let tree = git_ok(&root_path, &["write-tree"])
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Couldn't snapshot your changes.".to_string())?;
     // One forward commit on top of the tip → single parent → history stays linear.
     let ct = git(&root_path, &["commit-tree", &tree, "-p", &tip, "-m", msg])?;
     if !ct.status.success() {
@@ -808,11 +933,17 @@ pub fn git_keep_version(root: &str, message: &str) -> Result<CommitResult, Strin
         return Err("Couldn't create the new version.".into());
     }
     // Advance the branch (guarded by the expected old tip) and reattach HEAD to it.
-    let upd = git(&root_path, &["update-ref", &format!("refs/heads/{branch}"), &new, &tip])?;
+    let upd = git(
+        &root_path,
+        &["update-ref", &format!("refs/heads/{branch}"), &new, &tip],
+    )?;
     if !upd.status.success() {
         return Err(String::from_utf8_lossy(&upd.stderr).trim().to_string());
     }
-    let sym = git(&root_path, &["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")])?;
+    let sym = git(
+        &root_path,
+        &["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")],
+    )?;
     if !sym.status.success() {
         return Err(String::from_utf8_lossy(&sym.stderr).trim().to_string());
     }
@@ -820,7 +951,10 @@ pub fn git_keep_version(root: &str, message: &str) -> Result<CommitResult, Strin
     if let Some(stash_ref) = find_preview_stash(&root_path) {
         let _ = git(&root_path, &["stash", "drop", &stash_ref]);
     }
-    let _ = git(&root_path, &["config", "--local", "--unset", PREVIEW_BRANCH_CFG]);
+    let _ = git(
+        &root_path,
+        &["config", "--local", "--unset", PREVIEW_BRANCH_CFG],
+    );
 
     Ok(CommitResult {
         sha: new.clone(),
@@ -894,8 +1028,11 @@ mod tests {
         std::fs::write(base.join("NOTES.md"), "fresh\n").unwrap();
         std::fs::write(base.join("-dash.md"), "dashed\n").unwrap();
         let wt = git_worktree_diff(&root).unwrap();
-        let kinds: Vec<(&str, &str)> =
-            wt.files.iter().map(|f| (f.path.as_str(), f.kind.as_str())).collect();
+        let kinds: Vec<(&str, &str)> = wt
+            .files
+            .iter()
+            .map(|f| (f.path.as_str(), f.kind.as_str()))
+            .collect();
         assert!(kinds.contains(&("SKILL.md", "modified")));
         assert!(kinds.contains(&("NOTES.md", "untracked")));
         // The diff carries the tracked edit and every untracked add, including
@@ -962,7 +1099,12 @@ mod tests {
         let paths: Vec<&str> = changes.iter().map(|c| c.path.as_str()).collect();
         assert!(paths.contains(&"SKILL.md"), "got {paths:?}");
         assert!(paths.contains(&"NOTES.md"), "got {paths:?}");
-        assert!(!paths.iter().any(|p| p.contains("README") || p.contains("skills/")), "leaked: {paths:?}");
+        assert!(
+            !paths
+                .iter()
+                .any(|p| p.contains("README") || p.contains("skills/")),
+            "leaked: {paths:?}"
+        );
 
         assert!(git_info(&skill_root).unwrap().dirty); // now dirty (scoped)
 
@@ -970,8 +1112,16 @@ mod tests {
         let wt = git_worktree_diff(&skill_root).unwrap();
         assert!(wt.diff.contains("a/SKILL.md") && wt.diff.contains("+hi there"));
         assert!(wt.diff.contains("NOTES.md") && wt.diff.contains("+fresh"));
-        assert!(!wt.diff.contains("README"), "leaked outside change: {}", wt.diff);
-        assert!(!wt.diff.contains("skills/my-skill"), "unstripped prefix: {}", wt.diff);
+        assert!(
+            !wt.diff.contains("README"),
+            "leaked outside change: {}",
+            wt.diff
+        );
+        assert!(
+            !wt.diff.contains("skills/my-skill"),
+            "unstripped prefix: {}",
+            wt.diff
+        );
 
         // file-at-rev resolves against the skill dir (skill-relative path).
         let head = git_file_at(&skill_root, "HEAD", "SKILL.md").unwrap();
@@ -982,7 +1132,10 @@ mod tests {
         git_discard(&skill_root, "SKILL.md").unwrap();
         let restored = std::fs::read_to_string(skill.join("SKILL.md")).unwrap();
         assert!(restored.contains("name: t") && !restored.contains("hi there"));
-        assert_eq!(std::fs::read_to_string(base.join("README.md")).unwrap(), "outer changed\n");
+        assert_eq!(
+            std::fs::read_to_string(base.join("README.md")).unwrap(),
+            "outer changed\n"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -1025,17 +1178,30 @@ mod tests {
         // and the FULL version list still shows (logs the branch, not detached HEAD).
         let st = git_enter_version(&root, &v1_sha).unwrap();
         assert!(st.stashed, "uncommitted work was stashed");
-        assert!(current_branch(&base).is_none(), "HEAD detached during preview");
-        assert!(std::fs::read_to_string(base.join("SKILL.md")).unwrap().contains("v1"));
+        assert!(
+            current_branch(&base).is_none(),
+            "HEAD detached during preview"
+        );
+        assert!(std::fs::read_to_string(base.join("SKILL.md"))
+            .unwrap()
+            .contains("v1"));
         assert!(!base.join("NOTES.md").exists(), "untracked work set aside");
         assert!(find_preview_stash(&base).is_some());
-        assert_eq!(git_log(&root, 10).unwrap().len(), 3, "full version list visible mid-preview");
+        assert_eq!(
+            git_log(&root, 10).unwrap().len(),
+            3,
+            "full version list visible mid-preview"
+        );
 
         // Edit the previewed version and SAVE → a new version on top of the TIP.
         write("SKILL.md", "---\nname: t\n---\nv1-edited");
         let res = git_keep_version(&root, "edit based on v1").unwrap();
         assert!(!res.sha.is_empty());
-        assert_eq!(current_branch(&base).as_deref(), Some(branch.as_str()), "reattached to the branch");
+        assert_eq!(
+            current_branch(&base).as_deref(),
+            Some(branch.as_str()),
+            "reattached to the branch"
+        );
         let log2 = git_log(&root, 10).unwrap();
         assert_eq!(log2.len(), 4, "exactly one new version");
         assert_eq!(log2[0].sha, res.sha, "the new version is the tip");
@@ -1044,21 +1210,43 @@ mod tests {
         let cols: Vec<&str> = parents.split_whitespace().collect();
         assert_eq!(cols.len(), 2, "single parent — no branch/merge");
         assert_eq!(cols[1], v3_sha, "new version sits on the old tip");
-        assert!(std::fs::read_to_string(base.join("SKILL.md")).unwrap().contains("v1-edited"));
-        assert!(!base.join("NOTES.md").exists(), "set-aside work discarded on save");
-        assert!(find_preview_stash(&base).is_none(), "no stash pile-up after save");
+        assert!(std::fs::read_to_string(base.join("SKILL.md"))
+            .unwrap()
+            .contains("v1-edited"));
+        assert!(
+            !base.join("NOTES.md").exists(),
+            "set-aside work discarded on save"
+        );
+        assert!(
+            find_preview_stash(&base).is_none(),
+            "no stash pile-up after save"
+        );
 
         // Exit (no save) restores the set-aside work and creates no version.
         write("SKILL.md", "---\nname: t\n---\nwip2");
         write("NOTES.md", "wip2note");
         git_enter_version(&root, &v1_sha).unwrap();
-        assert!(std::fs::read_to_string(base.join("SKILL.md")).unwrap().contains("v1"));
+        assert!(std::fs::read_to_string(base.join("SKILL.md"))
+            .unwrap()
+            .contains("v1"));
         git_exit_version(&root).unwrap();
         assert_eq!(current_branch(&base).as_deref(), Some(branch.as_str()));
-        assert!(std::fs::read_to_string(base.join("SKILL.md")).unwrap().contains("wip2"), "edit restored");
-        assert!(base.join("NOTES.md").exists(), "untracked work restored on exit");
+        assert!(
+            std::fs::read_to_string(base.join("SKILL.md"))
+                .unwrap()
+                .contains("wip2"),
+            "edit restored"
+        );
+        assert!(
+            base.join("NOTES.md").exists(),
+            "untracked work restored on exit"
+        );
         assert!(find_preview_stash(&base).is_none(), "no stash left behind");
-        assert_eq!(git_log(&root, 10).unwrap().len(), 4, "exit creates no version");
+        assert_eq!(
+            git_log(&root, 10).unwrap().len(),
+            4,
+            "exit creates no version"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -1068,7 +1256,8 @@ mod tests {
         if !git_available() {
             return;
         }
-        let base = std::env::temp_dir().join(format!("ass_preview_conflict_{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("ass_preview_conflict_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let root = base.to_string_lossy().to_string();
@@ -1099,7 +1288,10 @@ mod tests {
         let _ = git(&base, &["add", "-A"]);
         let tree = git_ok(&base, &["write-tree"]).unwrap();
         let ext = git_ok(&base, &["commit-tree", &tree, "-p", &tip, "-m", "external"]).unwrap();
-        let _ = git(&base, &["update-ref", &format!("refs/heads/{branch}"), &ext]);
+        let _ = git(
+            &base,
+            &["update-ref", &format!("refs/heads/{branch}"), &ext],
+        );
         let _ = git(&base, &["checkout", "-f", &v1]); // back to the clean detached preview
 
         // Exit: the stash pop CONFLICTS (its base is the old tip, not `ext`). The fix
@@ -1107,12 +1299,28 @@ mod tests {
         // KEEP the set-aside work in the stash (recoverable, never silently lost).
         git_exit_version(&root).unwrap();
         let content = std::fs::read_to_string(base.join("SKILL.md")).unwrap();
-        assert!(!content.contains("<<<<<<<") && !content.contains(">>>>>>>"), "no conflict markers left: {content}");
-        assert!(content.contains("EXTERNAL-LINE"), "working tree is the clean new tip, got: {content}");
+        assert!(
+            !content.contains("<<<<<<<") && !content.contains(">>>>>>>"),
+            "no conflict markers left: {content}"
+        );
+        assert!(
+            content.contains("EXTERNAL-LINE"),
+            "working tree is the clean new tip, got: {content}"
+        );
         let porcelain = git_ok(&base, &["status", "--porcelain"]).unwrap_or_default();
-        assert!(!porcelain.contains("UU"), "no unmerged index entry: {porcelain}");
-        assert!(find_preview_stash(&base).is_some(), "set-aside work kept (recoverable), not lost");
-        assert_eq!(current_branch(&base).as_deref(), Some(branch.as_str()), "reattached to the branch");
+        assert!(
+            !porcelain.contains("UU"),
+            "no unmerged index entry: {porcelain}"
+        );
+        assert!(
+            find_preview_stash(&base).is_some(),
+            "set-aside work kept (recoverable), not lost"
+        );
+        assert_eq!(
+            current_branch(&base).as_deref(),
+            Some(branch.as_str()),
+            "reattached to the branch"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }

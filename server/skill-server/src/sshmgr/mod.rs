@@ -28,7 +28,11 @@ struct State {
 }
 
 fn idle_status() -> RemoteStatus {
-    RemoteStatus { state: "idle".into(), host: None, message: None }
+    RemoteStatus {
+        state: "idle".into(),
+        host: None,
+        message: None,
+    }
 }
 
 /// Update the live status during a connect, unless that connect has been superseded.
@@ -37,7 +41,11 @@ fn set_stage(state: &Mutex<State>, generation: u64, stage: &str, host: &str, msg
     if s.generation != generation {
         return; // a newer connect/disconnect won — don't clobber its status
     }
-    s.status = RemoteStatus { state: stage.into(), host: Some(host.into()), message: Some(msg.into()) };
+    s.status = RemoteStatus {
+        state: stage.into(),
+        host: Some(host.into()),
+        message: Some(msg.into()),
+    };
 }
 
 pub struct SshRemoteControl {

@@ -21,7 +21,12 @@ pub fn handle(method: &Method, path: &str, body: &str, ctx: &ServerCtx) -> Reply
         },
         (Method::Get, "/api/remote/status") => ok(&remote.status()),
         (Method::Post, "/api/remote/connect") => {
-            let host = v.get("host").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+            let host = v
+                .get("host")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
             if host.is_empty() {
                 return err(400, "A host is required.");
             }
@@ -50,7 +55,8 @@ pub fn handle(method: &Method, path: &str, body: &str, ctx: &ServerCtx) -> Reply
 /// injection) and only characters that appear in real hostnames/users/aliases.
 fn valid_host(h: &str) -> bool {
     !h.starts_with('-')
-        && h.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '@' | ':'))
+        && h.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '@' | ':'))
 }
 
 fn ok<T: serde::Serialize>(v: &T) -> Reply {

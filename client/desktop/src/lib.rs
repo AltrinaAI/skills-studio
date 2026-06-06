@@ -15,7 +15,11 @@ use skill_server::{ServerConfig, SshRemoteControl};
 /// dev-vendored tree (`client/desktop/binaries/<triple>/`, populated by
 /// `scripts/fetch-engine.sh`). Returns the first match.
 fn find_bundled_engine(app: &tauri::App) -> Option<std::path::PathBuf> {
-    let exe = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
+    let exe = if cfg!(windows) {
+        "llama-server.exe"
+    } else {
+        "llama-server"
+    };
     let look = |base: std::path::PathBuf| -> Option<std::path::PathBuf> {
         // base/<triple>/<exe> (one platform subdir), or base/<exe> directly.
         if let Ok(entries) = std::fs::read_dir(&base) {
@@ -37,7 +41,10 @@ fn find_bundled_engine(app: &tauri::App) -> Option<std::path::PathBuf> {
     let order: Vec<std::path::PathBuf> = if cfg!(debug_assertions) {
         std::iter::once(source).chain(resource).collect()
     } else {
-        resource.into_iter().chain(std::iter::once(source)).collect()
+        resource
+            .into_iter()
+            .chain(std::iter::once(source))
+            .collect()
     };
     order.into_iter().find_map(look)
 }
@@ -55,9 +62,9 @@ pub fn run() {
             // ── lifecycle this process owns (the in-process server is spawned with
             //    startup_maintenance:false, so these run exactly once) ──
             skill_term::sweep_orphans(); // reap terminals orphaned by a hard-killed predecessor
-            // Point the on-device generator at the bundled/vendored llama-server so
-            // it works with no config; an explicit env override still wins. The
-            // in-process server shares this process, so it sees the env var.
+                                         // Point the on-device generator at the bundled/vendored llama-server so
+                                         // it works with no config; an explicit env override still wins. The
+                                         // in-process server shares this process, so it sees the env var.
             if std::env::var_os("SKILL_STUDIO_LLAMA_SERVER").is_none() {
                 if let Some(p) = find_bundled_engine(app) {
                     std::env::set_var("SKILL_STUDIO_LLAMA_SERVER", p);
@@ -85,7 +92,9 @@ pub fn run() {
                 // Prod: an ephemeral port, read back from the handle.
                 port: if tauri::is_dev() { 8765 } else { 0 },
                 dist,
-                bootstrap_skill: resource_dir.clone().map(|r| r.join("skills").join("skill-studio")),
+                bootstrap_skill: resource_dir
+                    .clone()
+                    .map(|r| r.join("skills").join("skill-studio")),
                 examples_base: resource_dir, // resolve bundled examples by relative path
                 startup_maintenance: false,
                 // Plug the SSH connection manager into the local switchboard.
@@ -109,11 +118,15 @@ pub fn run() {
             } else {
                 format!("http://127.0.0.1:{port}") // the in-process server serves UI + /api
             };
-            WebviewWindowBuilder::new(app.handle(), "main", WebviewUrl::External(url.parse().unwrap()))
-                .title("Skill Studio")
-                .inner_size(1200.0, 800.0)
-                .min_inner_size(720.0, 480.0)
-                .build()?;
+            WebviewWindowBuilder::new(
+                app.handle(),
+                "main",
+                WebviewUrl::External(url.parse().unwrap()),
+            )
+            .title("Skill Studio")
+            .inner_size(1200.0, 800.0)
+            .min_inner_size(720.0, 480.0)
+            .build()?;
             Ok(())
         })
         .build(tauri::generate_context!())

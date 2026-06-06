@@ -70,7 +70,10 @@ fn cuda_backend() -> Option<GpuBackend> {
         return None;
     }
     let backend_lib = find_backend_lib(lib_name)?; // bundled next to the engine binary
-    Some(GpuBackend { backend_lib, lib_dirs: cuda_runtime_dirs() })
+    Some(GpuBackend {
+        backend_lib,
+        lib_dirs: cuda_runtime_dirs(),
+    })
 }
 
 /// The ggml CUDA backend filename for this platform, or `None` where we don't ship
@@ -93,7 +96,11 @@ fn nvidia_present() -> bool {
 
 fn nvidia_smi_reports_gpu() -> bool {
     use std::process::Command;
-    let exe = if cfg!(windows) { "nvidia-smi.exe" } else { "nvidia-smi" };
+    let exe = if cfg!(windows) {
+        "nvidia-smi.exe"
+    } else {
+        "nvidia-smi"
+    };
     match Command::new(exe).arg("-L").output() {
         Ok(out) => out.status.success() && String::from_utf8_lossy(&out.stdout).contains("GPU "),
         Err(_) => false,
@@ -117,7 +124,10 @@ fn driver_lib_present() -> bool {
     #[cfg(target_os = "windows")]
     {
         let sysroot = std::env::var("SystemRoot").unwrap_or_else(|_| String::from("C:\\Windows"));
-        return Path::new(&sysroot).join("System32").join("nvcuda.dll").exists();
+        return Path::new(&sysroot)
+            .join("System32")
+            .join("nvcuda.dll")
+            .exists();
     }
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
@@ -139,7 +149,9 @@ fn find_backend_lib(lib_name: &str) -> Option<PathBuf> {
 fn cuda_runtime_dirs() -> Vec<PathBuf> {
     // Explicit override wins (airgapped / non-standard installs).
     if let Ok(v) = std::env::var("SKILL_STUDIO_CUDA_DIR") {
-        let dirs: Vec<PathBuf> = std::env::split_paths(&v).filter(|p| !p.as_os_str().is_empty()).collect();
+        let dirs: Vec<PathBuf> = std::env::split_paths(&v)
+            .filter(|p| !p.as_os_str().is_empty())
+            .collect();
         if !dirs.is_empty() {
             return dirs;
         }
@@ -192,8 +204,11 @@ fn cuda_runtime_dirs() -> Vec<PathBuf> {
         if let Ok(cuda_path) = std::env::var("CUDA_PATH") {
             add(PathBuf::from(cuda_path).join("bin"));
         }
-        let pf = std::env::var("ProgramFiles").unwrap_or_else(|_| String::from("C:\\Program Files"));
-        let cuda_root = PathBuf::from(pf).join("NVIDIA GPU Computing Toolkit").join("CUDA");
+        let pf =
+            std::env::var("ProgramFiles").unwrap_or_else(|_| String::from("C:\\Program Files"));
+        let cuda_root = PathBuf::from(pf)
+            .join("NVIDIA GPU Computing Toolkit")
+            .join("CUDA");
         if let Ok(rd) = std::fs::read_dir(&cuda_root) {
             for e in rd.flatten() {
                 add(e.path().join("bin"));
@@ -227,9 +242,14 @@ fn dir_has_cuda_runtime(d: &Path) -> bool {
     if !d.is_dir() {
         return false;
     }
-    ["libcudart.so.12", "libcublas.so.12", "cudart64_12.dll", "cublas64_12.dll"]
-        .iter()
-        .any(|f| d.join(f).exists())
+    [
+        "libcudart.so.12",
+        "libcublas.so.12",
+        "cudart64_12.dll",
+        "cublas64_12.dll",
+    ]
+    .iter()
+    .any(|f| d.join(f).exists())
 }
 
 #[cfg(test)]

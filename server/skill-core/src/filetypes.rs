@@ -107,7 +107,10 @@ mod tests {
     fn maps_known_types() {
         assert_eq!(file_type("foo.py"), ("code", "python", "Python"));
         assert_eq!(file_type("data.json"), ("data", "json", "JSON"));
-        assert_eq!(file_type("Dockerfile"), ("code", "dockerfile", "Dockerfile"));
+        assert_eq!(
+            file_type("Dockerfile"),
+            ("code", "dockerfile", "Dockerfile")
+        );
         assert_eq!(file_type("SKILL.md").0, "markdown");
         assert_eq!(file_type("noext"), ("text", "plaintext", "Text"));
         assert_eq!(file_type("weird.zzz"), ("text", "plaintext", "Text"));

@@ -122,13 +122,22 @@ fn diff_hash(diff: &str) -> u64 {
 /// The cached message for `root` only when it was drafted from this exact diff.
 fn cached_for(root: &str, hash: u64) -> Option<String> {
     let guard = cache().lock().ok()?;
-    guard.get(root).filter(|c| c.diff_hash == hash).map(|c| c.message.clone())
+    guard
+        .get(root)
+        .filter(|c| c.diff_hash == hash)
+        .map(|c| c.message.clone())
 }
 
 /// Replace the cached entry for `root` (a new diff hash supersedes the old draft).
 fn store_cached(root: &str, hash: u64, message: &str) {
     if let Ok(mut guard) = cache().lock() {
-        guard.insert(root.to_string(), Cached { diff_hash: hash, message: message.to_string() });
+        guard.insert(
+            root.to_string(),
+            Cached {
+                diff_hash: hash,
+                message: message.to_string(),
+            },
+        );
     }
 }
 
@@ -160,7 +169,11 @@ fn commit_schema() -> serde_json::Value {
 fn extract_commit_message(raw: &str) -> String {
     serde_json::from_str::<serde_json::Value>(raw)
         .ok()
-        .and_then(|v| v.get("commit_message").and_then(|m| m.as_str()).map(|s| s.to_string()))
+        .and_then(|v| {
+            v.get("commit_message")
+                .and_then(|m| m.as_str())
+                .map(|s| s.to_string())
+        })
         .unwrap_or_else(|| raw.to_string())
 }
 
@@ -187,8 +200,10 @@ fn debug_log(root: &str, messages: &[ChatMessage], raw: &str, final_msg: &str) {
     let _ = std::fs::write(dir.join("commitmsg-last.log"), &entry);
     // Opt-in: the full appended history.
     if std::env::var_os("SKILL_STUDIO_COMMIT_DEBUG").is_some() {
-        if let Ok(mut f) =
-            std::fs::OpenOptions::new().create(true).append(true).open(dir.join("commitmsg-debug.log"))
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("commitmsg-debug.log"))
         {
             use std::io::Write;
             let _ = f.write_all(entry.as_bytes());
@@ -238,7 +253,9 @@ fn strip_wrapping_quotes(s: &str) -> String {
     let mut chars = t.chars();
     if let (Some(first), Some(last)) = (chars.next(), t.chars().last()) {
         if first == last && (first == '"' || first == '\'' || first == '`') && t.len() >= 2 {
-            return t[first.len_utf8()..t.len() - last.len_utf8()].trim().to_string();
+            return t[first.len_utf8()..t.len() - last.len_utf8()]
+                .trim()
+                .to_string();
         }
     }
     t.to_string()
@@ -265,15 +282,27 @@ mod tests {
         let raw = r#"{"analysis":"removed the body","commit_message":"docs: trim SKILL.md"}"#;
         assert_eq!(extract_commit_message(raw), "docs: trim SKILL.md");
         // Falls back to the raw text when it isn't the expected JSON object.
-        assert_eq!(extract_commit_message("docs: plain text"), "docs: plain text");
+        assert_eq!(
+            extract_commit_message("docs: plain text"),
+            "docs: plain text"
+        );
     }
 
     #[test]
     fn post_process_strips_think_fences_and_quotes() {
-        assert_eq!(post_process("<think>let me reason</think>\nfeat: add thing"), "feat: add thing");
+        assert_eq!(
+            post_process("<think>let me reason</think>\nfeat: add thing"),
+            "feat: add thing"
+        );
         assert_eq!(post_process("```\nfix: bug\n```"), "fix: bug");
-        assert_eq!(post_process("```text\ndocs: update readme\n```"), "docs: update readme");
+        assert_eq!(
+            post_process("```text\ndocs: update readme\n```"),
+            "docs: update readme"
+        );
         assert_eq!(post_process("\"chore: bump deps\""), "chore: bump deps");
-        assert_eq!(post_process("  refactor(core): tidy  "), "refactor(core): tidy");
+        assert_eq!(
+            post_process("  refactor(core): tidy  "),
+            "refactor(core): tidy"
+        );
     }
 }

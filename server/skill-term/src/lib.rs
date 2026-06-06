@@ -171,13 +171,19 @@ fn proc_starttime(pid: u32) -> Option<u64> {
     // parse from after the LAST ')': the remaining fields begin at `state`, and
     // starttime is the 20th of those (field 22 overall).
     let after = stat.rsplit_once(')')?.1;
-    after.split_whitespace().nth(19).and_then(|s| s.parse().ok())
+    after
+        .split_whitespace()
+        .nth(19)
+        .and_then(|s| s.parse().ok())
 }
 
 /// True iff `pid` is the *same* owner that recorded `start` — defeats pid reuse.
 /// When `start` is unknown (older sessions), falls back to a plain liveness check.
 fn owner_alive(pid: u32, start: Option<u64>) -> bool {
-    pid_alive(pid) && start.map(|s| proc_starttime(pid) == Some(s)).unwrap_or(true)
+    pid_alive(pid)
+        && start
+            .map(|s| proc_starttime(pid) == Some(s))
+            .unwrap_or(true)
 }
 
 /// Strip characters that would corrupt our tab-separated `list-sessions` parse.
@@ -273,7 +279,10 @@ pub fn kill_session(id: &str) -> Result<(), String> {
 }
 
 fn session_opt_u64(id: &str, key: &str) -> Option<u64> {
-    let out = tmux().args(["show-options", "-t", id, "-v", key]).output().ok()?;
+    let out = tmux()
+        .args(["show-options", "-t", id, "-v", key])
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -406,8 +415,19 @@ pub fn create_session(
     let rows_s = rows.max(2).to_string();
     let status = tmux()
         .args([
-            "new-session", "-d", "-s", &name, "-c", &cwd_resolved, "-x", &cols_s, "-y", &rows_s,
-            "bash", "-lc", &line,
+            "new-session",
+            "-d",
+            "-s",
+            &name,
+            "-c",
+            &cwd_resolved,
+            "-x",
+            &cols_s,
+            "-y",
+            &rows_s,
+            "bash",
+            "-lc",
+            &line,
         ])
         .status()
         .map_err(|e| format!("Couldn't start tmux: {e}"))?;
@@ -419,7 +439,9 @@ pub fn create_session(
     // Sanitize every stored value: tabs/newlines (legal in paths) would corrupt
     // the tab-separated `list-sessions` parse.
     let set = |k: &str, v: &str| {
-        let _ = tmux().args(["set-option", "-t", &name, k, &sanitize_meta(v)]).output();
+        let _ = tmux()
+            .args(["set-option", "-t", &name, k, &sanitize_meta(v)])
+            .output();
     };
     set("@ass_label", &label);
     set("@ass_agent", &opt.agent);
@@ -456,11 +478,19 @@ pub struct Attachment {
 
 impl Attachment {
     fn write_bytes(&self, data: &[u8]) -> Result<(), String> {
-        let mut w = self.writer.lock().map_err(|_| "terminal writer is unavailable".to_string())?;
-        w.write_all(data).and_then(|_| w.flush()).map_err(|e| e.to_string())
+        let mut w = self
+            .writer
+            .lock()
+            .map_err(|_| "terminal writer is unavailable".to_string())?;
+        w.write_all(data)
+            .and_then(|_| w.flush())
+            .map_err(|e| e.to_string())
     }
     fn resize_to(&self, cols: u16, rows: u16) -> Result<(), String> {
-        let m = self.master.lock().map_err(|_| "terminal is unavailable".to_string())?;
+        let m = self
+            .master
+            .lock()
+            .map_err(|_| "terminal is unavailable".to_string())?;
         m.resize(PtySize {
             rows: rows.max(2),
             cols: cols.max(2),
@@ -480,7 +510,11 @@ impl Drop for Attachment {
         if let Ok(mut reg) = registry().lock() {
             // Remove only if we're still the registered entry (identity by seq),
             // so a newer attachment that replaced us is never clobbered.
-            if reg.get(&self.id).map(|(seq, _)| *seq == self.seq).unwrap_or(false) {
+            if reg
+                .get(&self.id)
+                .map(|(seq, _)| *seq == self.seq)
+                .unwrap_or(false)
+            {
                 reg.remove(&self.id);
             }
         }
@@ -498,7 +532,11 @@ fn registry() -> &'static Registry {
 
 /// Attach to a session: spawn `tmux attach` in a PTY sized `cols`×`rows`, start a
 /// reader thread, and return the keep-alive handle plus a channel of raw output.
-pub fn attach(id: &str, cols: u16, rows: u16) -> Result<(Arc<Attachment>, Receiver<Vec<u8>>), String> {
+pub fn attach(
+    id: &str,
+    cols: u16,
+    rows: u16,
+) -> Result<(Arc<Attachment>, Receiver<Vec<u8>>), String> {
     if !id.starts_with(PREFIX) || !session_exists(id) {
         return Err("That terminal session no longer exists.".into());
     }
@@ -590,7 +628,11 @@ pub fn attach(id: &str, cols: u16, rows: u16) -> Result<(Arc<Attachment>, Receiv
 }
 
 fn current(id: &str) -> Option<Arc<Attachment>> {
-    registry().lock().ok()?.get(id).and_then(|(_, w)| w.upgrade())
+    registry()
+        .lock()
+        .ok()?
+        .get(id)
+        .and_then(|(_, w)| w.upgrade())
 }
 
 /// Send keystroke bytes to a session's current attachment.
@@ -615,7 +657,10 @@ enum ExtRel {
     /// A fixed relative file inside the extension dir.
     File(&'static str),
     /// A `<dir>/<arch>/<file>` layout — glob the single arch subdir.
-    GlobDir { dir: &'static str, file: &'static str },
+    GlobDir {
+        dir: &'static str,
+        file: &'static str,
+    },
 }
 
 struct Spec {
@@ -717,7 +762,11 @@ fn bin_version(bin: &str) -> Option<String> {
     }
     text.split_whitespace()
         .find(|t| {
-            t.contains('.') && t.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+            t.contains('.')
+                && t.chars()
+                    .next()
+                    .map(|c| c.is_ascii_digit())
+                    .unwrap_or(false)
         })
         .map(|s| {
             s.trim_matches(|c: char| !(c.is_ascii_alphanumeric() || c == '.' || c == '-'))
@@ -750,13 +799,13 @@ fn ext_finds(spec: &Spec) -> Vec<(&'static str, String)> {
                     let p = base.join(rel);
                     p.is_file().then_some(p)
                 }
-                ExtRel::GlobDir { dir: sub, file } => std::fs::read_dir(base.join(sub))
-                    .ok()
-                    .and_then(|rd| {
+                ExtRel::GlobDir { dir: sub, file } => {
+                    std::fs::read_dir(base.join(sub)).ok().and_then(|rd| {
                         rd.filter_map(|e| e.ok())
                             .map(|e| e.path().join(file))
                             .find(|p| p.is_file())
-                    }),
+                    })
+                }
             };
             if let Some(p) = bin {
                 let ps = p.to_string_lossy().into_owned();
@@ -855,9 +904,18 @@ mod tests {
     fn starttime_and_owner_alive() {
         let me = std::process::id();
         let start = proc_starttime(me).expect("our own start-time is readable");
-        assert!(owner_alive(me, Some(start)), "we are alive with our real start-time");
-        assert!(!owner_alive(me, Some(start.wrapping_add(1))), "wrong start-time ⇒ not the same owner");
-        assert!(owner_alive(me, None), "unknown start-time falls back to liveness");
+        assert!(
+            owner_alive(me, Some(start)),
+            "we are alive with our real start-time"
+        );
+        assert!(
+            !owner_alive(me, Some(start.wrapping_add(1))),
+            "wrong start-time ⇒ not the same owner"
+        );
+        assert!(
+            owner_alive(me, None),
+            "unknown start-time falls back to liveness"
+        );
         assert!(!owner_alive(2147480000, None), "a dead pid is never alive");
     }
 
@@ -886,7 +944,11 @@ mod tests {
         }
         drop(att);
         let _ = kill_session(&s.id);
-        assert!(seen.contains("HELLO_RT"), "should see echoed output; got {} bytes", seen.len());
+        assert!(
+            seen.contains("HELLO_RT"),
+            "should see echoed output; got {} bytes",
+            seen.len()
+        );
     }
 
     // tmux-gated end-to-end of the session lifetime + orphan sweep.
@@ -901,16 +963,25 @@ mod tests {
         assert!(s.id.starts_with(PREFIX));
         assert!(session_exists(&s.id), "session should exist after create");
         let listed = list_sessions().unwrap();
-        let found = listed.iter().find(|x| x.id == s.id).expect("list_sessions should include it");
+        let found = listed
+            .iter()
+            .find(|x| x.id == s.id)
+            .expect("list_sessions should include it");
         assert_eq!(found.agent, "shell");
-        assert!(found.label.contains('·'), "label carries the agent + cwd basename");
+        assert!(
+            found.label.contains('·'),
+            "label carries the agent + cwd basename"
+        );
 
         // Re-tag with a dead owner pid → the orphan sweep must reap it.
         let _ = tmux()
             .args(["set-option", "-t", &s.id, "@ass_owner_pid", "2147480000"])
             .output();
         sweep_orphans();
-        assert!(!session_exists(&s.id), "sweep_orphans should kill a dead-owner session");
+        assert!(
+            !session_exists(&s.id),
+            "sweep_orphans should kill a dead-owner session"
+        );
     }
 
     // tmux-gated: a recycled pid (same pid, different start-time) is reaped.
@@ -929,6 +1000,9 @@ mod tests {
             .args(["set-option", "-t", &s.id, "@ass_owner_start", "1"])
             .output();
         sweep_orphans();
-        assert!(!session_exists(&s.id), "start-time mismatch (pid reuse) should be reaped");
+        assert!(
+            !session_exists(&s.id),
+            "start-time mismatch (pid reuse) should be reaped"
+        );
     }
 }

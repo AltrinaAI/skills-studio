@@ -281,7 +281,10 @@ pub(crate) fn send_reply(request: Request, reply: Reply) {
         ("Content-Type", reply.content_type.as_str()),
         ("Access-Control-Allow-Origin", "*"),
         ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
-        ("Access-Control-Allow-Headers", "Content-Type, Authorization"),
+        (
+            "Access-Control-Allow-Headers",
+            "Content-Type, Authorization",
+        ),
         ("Cache-Control", "no-store"),
     ];
     for (k, val) in headers {
@@ -381,7 +384,11 @@ fn query_param(url: &str, key: &str) -> Option<String> {
     for pair in q.split('&') {
         if let Some((k, v)) = pair.split_once('=') {
             if k == key {
-                return Some(urlencoding::decode(v).map(|c| c.into_owned()).unwrap_or_else(|_| v.to_string()));
+                return Some(
+                    urlencoding::decode(v)
+                        .map(|c| c.into_owned())
+                        .unwrap_or_else(|_| v.to_string()),
+                );
             }
         }
     }
@@ -422,15 +429,23 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             let root = skill::resolve_skill_input(&s("path"), ctx.examples_base.as_deref());
             json_reply(skill::build_raw_skill(&root))
         }
-        (Method::Post, "/api/read-file") => json_reply(skill::read_file_impl(&s("root"), &s("rel"))),
-        (Method::Post, "/api/write-file") => {
-            json_reply(skill::write_file_impl(&s("root"), &s("rel"), &s("content")).map(|_| json!({ "ok": true })))
+        (Method::Post, "/api/read-file") => {
+            json_reply(skill::read_file_impl(&s("root"), &s("rel")))
         }
-        (Method::Post, "/api/read-image") => json_reply(skill::read_image_impl(&s("root"), &s("rel"))),
+        (Method::Post, "/api/write-file") => json_reply(
+            skill::write_file_impl(&s("root"), &s("rel"), &s("content"))
+                .map(|_| json!({ "ok": true })),
+        ),
+        (Method::Post, "/api/read-image") => {
+            json_reply(skill::read_image_impl(&s("root"), &s("rel")))
+        }
         (Method::Post, "/api/list-dir") => json_reply(skill::list_dir_impl(&s("path"))),
         (Method::Post, "/api/sync-targets") => json_reply(sync::sync_targets(&s("root"))),
         (Method::Post, "/api/sync-skill") => {
-            let overwrite = v.get("overwrite").and_then(|x| x.as_bool()).unwrap_or(false);
+            let overwrite = v
+                .get("overwrite")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false);
             let link = v.get("link").and_then(|x| x.as_bool()).unwrap_or(false);
             json_reply(sync::sync_skill(&s("root"), &s("target"), overwrite, link))
         }
@@ -441,24 +456,47 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             json_reply(sync::create_skill(&s("target"), &s("name"), &s("content")))
         }
         (Method::Post, "/api/import-folder") => {
-            let overwrite = v.get("overwrite").and_then(|x| x.as_bool()).unwrap_or(false);
-            json_reply(sync::import_skill_folder(&s("source"), &s("target"), overwrite))
+            let overwrite = v
+                .get("overwrite")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false);
+            json_reply(sync::import_skill_folder(
+                &s("source"),
+                &s("target"),
+                overwrite,
+            ))
         }
         (Method::Post, "/api/import-zip") => {
             // `data` is the .zip base64-encoded (the JSON body must stay UTF-8 text).
-            let overwrite = v.get("overwrite").and_then(|x| x.as_bool()).unwrap_or(false);
-            json_reply(sync::import_skill_zip_base64(&s("data"), &s("target"), overwrite))
+            let overwrite = v
+                .get("overwrite")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false);
+            json_reply(sync::import_skill_zip_base64(
+                &s("data"),
+                &s("target"),
+                overwrite,
+            ))
         }
         // --- app-managed agent terminals (tmux-backed) ---
         (Method::Get, "/api/terminal/agents") => json_reply(Ok(skill_term::detect_agents())),
         (Method::Get, "/api/terminal/list") => json_reply(skill_term::list_sessions()),
         (Method::Post, "/api/terminal/create") => {
-            let u16f = |k: &str, d: u16| v.get(k).and_then(|x| x.as_u64()).map(|n| n as u16).unwrap_or(d);
+            let u16f = |k: &str, d: u16| {
+                v.get(k)
+                    .and_then(|x| x.as_u64())
+                    .map(|n| n as u16)
+                    .unwrap_or(d)
+            };
             let boolf = |k: &str| v.get(k).and_then(|x| x.as_bool()).unwrap_or(false);
             let extra: Vec<String> = v
                 .get("extraArgs")
                 .and_then(|x| x.as_array())
-                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
             json_reply(skill_term::create_session(
                 &s("agent"),
@@ -479,14 +517,23 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             json_reply(skill_term::write(&s("id"), &data).map(|_| json!({ "ok": true })))
         }
         (Method::Post, "/api/terminal/resize") => {
-            let u16f = |k: &str, d: u16| v.get(k).and_then(|x| x.as_u64()).map(|n| n as u16).unwrap_or(d);
+            let u16f = |k: &str, d: u16| {
+                v.get(k)
+                    .and_then(|x| x.as_u64())
+                    .map(|n| n as u16)
+                    .unwrap_or(d)
+            };
             json_reply(
-                skill_term::resize(&s("id"), u16f("cols", 80), u16f("rows", 24)).map(|_| json!({ "ok": true })),
+                skill_term::resize(&s("id"), u16f("cols", 80), u16f("rows", 24))
+                    .map(|_| json!({ "ok": true })),
             )
         }
         (Method::Post, "/api/detect-required-env") => {
             let root = s("root");
-            json_reply(secrets::secret_keys().map(|keys| skill::scan_for_env_vars(Path::new(&root), &keys)))
+            json_reply(
+                secrets::secret_keys()
+                    .map(|keys| skill::scan_for_env_vars(Path::new(&root), &keys)),
+            )
         }
         (Method::Post, "/api/git-info") => json_reply(gitops::git_info(&s("root"))),
         (Method::Post, "/api/git-init") => json_reply(gitops::git_init(&s("root"))),
@@ -494,13 +541,23 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             let roots: Vec<String> = v
                 .get("roots")
                 .and_then(|x| x.as_array())
-                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
             json_reply(Ok(gitops::git_dirty_many(&roots)))
         }
-        (Method::Post, "/api/git-commit") => json_reply(gitops::git_commit(&s("root"), &s("message"))),
-        (Method::Post, "/api/generate-commit-message") => json_reply(commitmsg::generate(&s("root"))),
-        (Method::Post, "/api/regenerate-commit-message") => json_reply(commitmsg::regenerate(&s("root"))),
+        (Method::Post, "/api/git-commit") => {
+            json_reply(gitops::git_commit(&s("root"), &s("message")))
+        }
+        (Method::Post, "/api/generate-commit-message") => {
+            json_reply(commitmsg::generate(&s("root")))
+        }
+        (Method::Post, "/api/regenerate-commit-message") => {
+            json_reply(commitmsg::regenerate(&s("root")))
+        }
         (Method::Post, "/api/peek-commit-message") => json_reply(commitmsg::peek(&s("root"))),
         (Method::Get, "/api/commit-model-status") => json_reply(Ok(engine::model_status())),
         (Method::Post, "/api/git-log") => {
@@ -508,19 +565,31 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             json_reply(gitops::git_log(&s("root"), limit))
         }
         (Method::Post, "/api/git-status") => json_reply(gitops::git_status(&s("root"))),
-        (Method::Post, "/api/git-worktree-diff") => json_reply(gitops::git_worktree_diff(&s("root"))),
-        (Method::Post, "/api/git-commit-diff") => json_reply(gitops::git_commit_diff(&s("root"), &s("sha"))),
-        (Method::Post, "/api/git-file-at") => json_reply(gitops::git_file_at(&s("root"), &s("rev"), &s("path"))),
-        (Method::Post, "/api/git-files-at") => json_reply(gitops::git_files_at(&s("root"), &s("rev"))),
+        (Method::Post, "/api/git-worktree-diff") => {
+            json_reply(gitops::git_worktree_diff(&s("root")))
+        }
+        (Method::Post, "/api/git-commit-diff") => {
+            json_reply(gitops::git_commit_diff(&s("root"), &s("sha")))
+        }
+        (Method::Post, "/api/git-file-at") => {
+            json_reply(gitops::git_file_at(&s("root"), &s("rev"), &s("path")))
+        }
+        (Method::Post, "/api/git-files-at") => {
+            json_reply(gitops::git_files_at(&s("root"), &s("rev")))
+        }
         (Method::Post, "/api/git-discard") => {
             json_reply(gitops::git_discard(&s("root"), &s("path")).map(|_| json!({ "ok": true })))
         }
         (Method::Post, "/api/git-discard-all") => {
             json_reply(gitops::git_discard_all(&s("root")).map(|_| json!({ "ok": true })))
         }
-        (Method::Post, "/api/git-enter-version") => json_reply(gitops::git_enter_version(&s("root"), &s("sha"))),
+        (Method::Post, "/api/git-enter-version") => {
+            json_reply(gitops::git_enter_version(&s("root"), &s("sha")))
+        }
         (Method::Post, "/api/git-exit-version") => json_reply(gitops::git_exit_version(&s("root"))),
-        (Method::Post, "/api/git-keep-version") => json_reply(gitops::git_keep_version(&s("root"), &s("message"))),
+        (Method::Post, "/api/git-keep-version") => {
+            json_reply(gitops::git_keep_version(&s("root"), &s("message")))
+        }
         (Method::Get, "/api/secrets-status") => json_reply(secrets::secrets_status()),
         (Method::Get, "/api/secrets-list") => json_reply(secrets::secrets_list()),
         (Method::Post, "/api/secret-set") => {
@@ -530,14 +599,22 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             json_reply(secrets::secret_delete(&s("key")).map(|_| json!({ "ok": true })))
         }
         (Method::Post, "/api/secrets-setup") => {
-            let bootstrap = ctx.bootstrap_skill.clone().or_else(|| bootstrap_skill_dir(&ctx.dist));
+            let bootstrap = ctx
+                .bootstrap_skill
+                .clone()
+                .or_else(|| bootstrap_skill_dir(&ctx.dist));
             json_reply(secrets::secrets_setup(bootstrap.as_deref()))
         }
         (Method::Get, "/api/download") => {
             let root = query_param(url, "root").unwrap_or_default();
             // Optional `vars=A,B` → bundle those managed secrets' values as a .env.
             let env_vars: Vec<String> = query_param(url, "vars")
-                .map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect())
+                .map(|s| {
+                    s.split(',')
+                        .map(|x| x.trim().to_string())
+                        .filter(|x| !x.is_empty())
+                        .collect()
+                })
                 .unwrap_or_default();
             match skill::zip_skill_bytes(&root, &env_vars) {
                 Ok((filename, bytes)) => Reply {
@@ -605,7 +682,10 @@ pub(crate) fn acquire_stream_slot() -> Option<StreamSlot> {
 pub(crate) fn reply_status(request: Request, status: u16, error: &str) {
     let body = serde_json::to_vec(&json!({ "error": error })).unwrap_or_default();
     let mut resp = Response::from_data(body).with_status_code(StatusCode(status));
-    for (k, val) in [("Content-Type", "application/json"), ("Access-Control-Allow-Origin", "*")] {
+    for (k, val) in [
+        ("Content-Type", "application/json"),
+        ("Access-Control-Allow-Origin", "*"),
+    ] {
         if let Ok(h) = Header::from_bytes(k.as_bytes(), val.as_bytes()) {
             resp.add_header(h);
         }
@@ -622,8 +702,12 @@ fn stream_terminal(request: Request, url: &str) {
     };
 
     let id = query_param(url, "id").unwrap_or_default();
-    let cols = query_param(url, "cols").and_then(|s| s.parse().ok()).unwrap_or(80u16);
-    let rows = query_param(url, "rows").and_then(|s| s.parse().ok()).unwrap_or(24u16);
+    let cols = query_param(url, "cols")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(80u16);
+    let rows = query_param(url, "rows")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(24u16);
 
     let (att, rx) = match skill_term::attach(&id, cols, rows) {
         Ok(pair) => pair,

@@ -44,7 +44,12 @@ struct Frontmatter {
 fn is_ignored_dir(p: &Path) -> bool {
     p.file_name()
         .and_then(|n| n.to_str())
-        .map(|n| matches!(n, ".git" | "node_modules" | ".venv" | ".next" | "__pycache__"))
+        .map(|n| {
+            matches!(
+                n,
+                ".git" | "node_modules" | ".venv" | ".next" | "__pycache__"
+            )
+        })
         .unwrap_or(false)
 }
 
@@ -203,8 +208,19 @@ const PROJECT_MARKERS: [(&str, &str); 5] = [
 // Non-hidden heavyweight dirs to never descend into (hidden dirs are pruned
 // wholesale below, except the markers).
 const PROJECT_PRUNE: &[&str] = &[
-    "node_modules", "target", "dist", "build", "out", "vendor", "Pods", "coverage",
-    "venv", "__pycache__", "site-packages", "Library", "AppData",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    "out",
+    "vendor",
+    "Pods",
+    "coverage",
+    "venv",
+    "__pycache__",
+    "site-packages",
+    "Library",
+    "AppData",
 ];
 
 fn is_marker(name: &str) -> bool {
@@ -221,7 +237,11 @@ fn prune_project_dir(path: &Path, home: &Path) -> bool {
     }
     // Go module cache (~/go/pkg/mod) — third-party deps, not your projects.
     if name == "pkg"
-        && path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) == Some("go")
+        && path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            == Some("go")
     {
         return true;
     }
@@ -312,38 +332,98 @@ pub fn discover_all() -> Result<Vec<AgentSkills>, String> {
     let mut g = Groups::default();
 
     // Claude Code — personal skills, plugin trees, remote plugins.
-    collect(&home.join(".claude/skills"), &|_: &Path| "personal", &mut g.claude, &mut seen);
-    collect(&home.join(".claude/plugins"), &claude_plugin_kind, &mut g.claude, &mut seen);
-    collect(&home.join(".claude/remote/plugins"), &|_: &Path| "plugin", &mut g.claude, &mut seen);
+    collect(
+        &home.join(".claude/skills"),
+        &|_: &Path| "personal",
+        &mut g.claude,
+        &mut seen,
+    );
+    collect(
+        &home.join(".claude/plugins"),
+        &claude_plugin_kind,
+        &mut g.claude,
+        &mut seen,
+    );
+    collect(
+        &home.join(".claude/remote/plugins"),
+        &|_: &Path| "plugin",
+        &mut g.claude,
+        &mut seen,
+    );
 
     // Codex — ~/.codex/skills, with .system/ being the bundled set.
-    collect(&home.join(".codex/skills"), &codex_kind, &mut g.codex, &mut seen);
+    collect(
+        &home.join(".codex/skills"),
+        &codex_kind,
+        &mut g.codex,
+        &mut seen,
+    );
 
     // Cursor — everything in `skills-cursor/` is Cursor-provided (their own
     // .gitignore labels it "Built-in Cursor skills"); the user's own skills live
     // in the separate `~/.cursor/skills/`.
-    collect(&home.join(".cursor/skills-cursor"), &|_: &Path| "official", &mut g.cursor, &mut seen);
-    collect(&home.join(".cursor/skills"), &|_: &Path| "personal", &mut g.cursor, &mut seen);
+    collect(
+        &home.join(".cursor/skills-cursor"),
+        &|_: &Path| "official",
+        &mut g.cursor,
+        &mut seen,
+    );
+    collect(
+        &home.join(".cursor/skills"),
+        &|_: &Path| "personal",
+        &mut g.cursor,
+        &mut seen,
+    );
 
     // OpenClaw — personal/local roots (bundled skills live in the read-only install dir).
-    collect(&home.join(".openclaw/skills"), &|_: &Path| "personal", &mut g.openclaw, &mut seen);
+    collect(
+        &home.join(".openclaw/skills"),
+        &|_: &Path| "personal",
+        &mut g.openclaw,
+        &mut seen,
+    );
 
     // Agent Skills standard shared dir — read by Codex, Cursor, Gemini CLI, and the
     // broader cohort. Its own group so a skill synced here isn't mislabeled as one
     // agent's. `.agent` (singular) is the minority variant (e.g. Antigravity).
-    collect(&home.join(".agents/skills"), &|_: &Path| "personal", &mut g.shared, &mut seen);
-    collect(&home.join(".agent/skills"), &|_: &Path| "personal", &mut g.shared, &mut seen);
+    collect(
+        &home.join(".agents/skills"),
+        &|_: &Path| "personal",
+        &mut g.shared,
+        &mut seen,
+    );
+    collect(
+        &home.join(".agent/skills"),
+        &|_: &Path| "personal",
+        &mut g.shared,
+        &mut seen,
+    );
 
     // Project-scoped skills in repos under the home directory.
     scan_projects(&home, &home, &mut g, &mut seen);
 
     // Shared standard dir first — it's the most broadly-read location.
     Ok(vec![
-        AgentSkills { agent: "Agent Skills".into(), skills: g.shared },
-        AgentSkills { agent: "Claude Code".into(), skills: g.claude },
-        AgentSkills { agent: "Codex".into(), skills: g.codex },
-        AgentSkills { agent: "Cursor".into(), skills: g.cursor },
-        AgentSkills { agent: "OpenClaw".into(), skills: g.openclaw },
+        AgentSkills {
+            agent: "Agent Skills".into(),
+            skills: g.shared,
+        },
+        AgentSkills {
+            agent: "Claude Code".into(),
+            skills: g.claude,
+        },
+        AgentSkills {
+            agent: "Codex".into(),
+            skills: g.codex,
+        },
+        AgentSkills {
+            agent: "Cursor".into(),
+            skills: g.cursor,
+        },
+        AgentSkills {
+            agent: "OpenClaw".into(),
+            skills: g.openclaw,
+        },
     ])
 }
 
@@ -384,10 +464,15 @@ mod tests {
             "plugin"
         );
         assert_eq!(
-            claude_plugin_kind(&p("/h/.claude/plugins/marketplaces/some-community/plugins/foo/skills/x")),
+            claude_plugin_kind(&p(
+                "/h/.claude/plugins/marketplaces/some-community/plugins/foo/skills/x"
+            )),
             "plugin"
         );
-        assert_eq!(codex_kind(&p("/h/.codex/skills/.system/imagegen")), "official");
+        assert_eq!(
+            codex_kind(&p("/h/.codex/skills/.system/imagegen")),
+            "official"
+        );
         assert_eq!(codex_kind(&p("/h/.codex/skills/my-skill")), "personal");
     }
 
@@ -395,7 +480,9 @@ mod tests {
     fn project_shapes() {
         let p = |s: &str| PathBuf::from(s);
         assert_eq!(
-            project_attribution(&p("/home/u/altrina/Tesseract/.claude/skills/tesseract-debug")),
+            project_attribution(&p(
+                "/home/u/altrina/Tesseract/.claude/skills/tesseract-debug"
+            )),
             Some(("Claude Code", "Tesseract".to_string()))
         );
         assert_eq!(
@@ -428,7 +515,11 @@ mod tests {
         let skill = base.join("nested").join("my-skill");
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&skill).unwrap();
-        std::fs::write(skill.join("SKILL.md"), "---\nname: my-skill\ndescription: hi\n---\nbody").unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: my-skill\ndescription: hi\n---\nbody",
+        )
+        .unwrap();
 
         let mut found = Vec::new();
         let mut seen = HashSet::new();
@@ -437,7 +528,10 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].name.as_deref(), Some("my-skill"));
         assert_eq!(found[0].kind, "personal");
-        assert!(!found[0].proposed, "a skill not under generated-skills/ isn't a proposal");
+        assert!(
+            !found[0].proposed,
+            "a skill not under generated-skills/ isn't a proposal"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -445,7 +539,9 @@ mod tests {
     fn flags_generated_skills_as_proposed() {
         let p = |s: &str| PathBuf::from(s);
         // A draft staged under generated-skills/ is a proposal…
-        assert!(is_proposed(&p("/h/.agents/skills/generated-skills/my-draft")));
+        assert!(is_proposed(&p(
+            "/h/.agents/skills/generated-skills/my-draft"
+        )));
         // …but the real skill it's promoted to (and ordinary skills) are not.
         assert!(!is_proposed(&p("/h/.agents/skills/my-draft")));
         assert!(!is_proposed(&p("/h/.agents/skills/generated-skills")));
@@ -474,9 +570,16 @@ mod tests {
     #[test]
     fn live_discovery_smoke() {
         let groups = discover_all().expect("discovery should not error");
-        assert_eq!(groups.len(), 5, "one group per agent + the shared Agent Skills dir");
+        assert_eq!(
+            groups.len(),
+            5,
+            "one group per agent + the shared Agent Skills dir"
+        );
         let total: usize = groups.iter().map(|g| g.skills.len()).sum();
-        println!("\n=== live discovery: {total} skill(s) across {} agents ===", groups.len());
+        println!(
+            "\n=== live discovery: {total} skill(s) across {} agents ===",
+            groups.len()
+        );
         for g in &groups {
             println!("  {} ({})", g.agent, g.skills.len());
             for s in &g.skills {
@@ -484,7 +587,10 @@ mod tests {
                     "    - {}  [{}]{}  {}",
                     s.name.as_deref().unwrap_or("(no name)"),
                     s.kind,
-                    s.project.as_deref().map(|p| format!("  (project: {p})")).unwrap_or_default(),
+                    s.project
+                        .as_deref()
+                        .map(|p| format!("  (project: {p})"))
+                        .unwrap_or_default(),
                     s.root
                 );
             }

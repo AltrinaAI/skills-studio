@@ -8,9 +8,12 @@ use std::process::{Command, Stdio};
 use crate::RemoteHost;
 
 const COMMON_OPTS: &[&str] = &[
-    "-o", "BatchMode=yes",
-    "-o", "ConnectTimeout=15",
-    "-o", "StrictHostKeyChecking=accept-new",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=15",
+    "-o",
+    "StrictHostKeyChecking=accept-new",
 ];
 
 pub struct RunError {
@@ -35,11 +38,17 @@ pub fn run(host: &str, remote_cmd: &str) -> Result<String, RunError> {
         .arg(host)
         .arg(remote_cmd)
         .output()
-        .map_err(|e| RunError { code: None, message: format!("failed to run ssh: {e} (is OpenSSH installed?)") })?;
+        .map_err(|e| RunError {
+            code: None,
+            message: format!("failed to run ssh: {e} (is OpenSSH installed?)"),
+        })?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
-        Err(RunError { code: out.status.code(), message: hint(host, &String::from_utf8_lossy(&out.stderr)) })
+        Err(RunError {
+            code: out.status.code(),
+            message: hint(host, &String::from_utf8_lossy(&out.stderr)),
+        })
     }
 }
 
@@ -63,7 +72,10 @@ pub fn run_with_stdin(host: &str, remote_cmd: &str, stdin: &[u8]) -> Result<(), 
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| RunError { code: None, message: format!("failed to run ssh: {e}") })?;
+        .map_err(|e| RunError {
+            code: None,
+            message: format!("failed to run ssh: {e}"),
+        })?;
 
     let mut sin = child.stdin.take().unwrap();
     let mut out = child.stdout.take().unwrap();
@@ -82,15 +94,24 @@ pub fn run_with_stdin(host: &str, remote_cmd: &str, stdin: &[u8]) -> Result<(), 
     drop(sin); // EOF → the remote `cat` finishes and the command exits
     let _ = out_t.join();
     let err_bytes = err_t.join().unwrap_or_default();
-    let status = child.wait().map_err(|e| RunError { code: None, message: e.to_string() })?;
+    let status = child.wait().map_err(|e| RunError {
+        code: None,
+        message: e.to_string(),
+    })?;
 
     if let Err(e) = write_res {
-        return Err(RunError { code: None, message: format!("writing to ssh failed: {e}") });
+        return Err(RunError {
+            code: None,
+            message: format!("writing to ssh failed: {e}"),
+        });
     }
     if status.success() {
         Ok(())
     } else {
-        Err(RunError { code: status.code(), message: hint(host, &String::from_utf8_lossy(&err_bytes)) })
+        Err(RunError {
+            code: status.code(),
+            message: hint(host, &String::from_utf8_lossy(&err_bytes)),
+        })
     }
 }
 
@@ -99,7 +120,9 @@ pub fn run_with_stdin(host: &str, remote_cmd: &str, stdin: &[u8]) -> Result<(), 
 pub fn list_hosts() -> Result<Vec<RemoteHost>, String> {
     let mut hosts = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    let Some(home) = dirs::home_dir() else { return Ok(hosts) };
+    let Some(home) = dirs::home_dir() else {
+        return Ok(hosts);
+    };
     let Ok(text) = std::fs::read_to_string(home.join(".ssh").join("config")) else {
         return Ok(hosts); // no config = no aliases; free-form entry still works
     };
@@ -119,7 +142,10 @@ pub fn list_hosts() -> Result<Vec<RemoteHost>, String> {
                 continue;
             }
             if seen.insert(alias.to_string()) {
-                hosts.push(RemoteHost { name: alias.to_string(), detail: None });
+                hosts.push(RemoteHost {
+                    name: alias.to_string(),
+                    detail: None,
+                });
             }
         }
     }
@@ -133,7 +159,10 @@ fn hint(host: &str, stderr: &str) -> String {
         format!("authentication to {host} failed — ensure key-based SSH access (e.g. your key is loaded in ssh-agent). ssh said: {s}")
     } else if s.contains("Could not resolve") || s.contains("Name or service not known") {
         format!("could not resolve host {host}. ssh said: {s}")
-    } else if s.contains("Connection refused") || s.contains("timed out") || s.contains("Operation timed out") {
+    } else if s.contains("Connection refused")
+        || s.contains("timed out")
+        || s.contains("Operation timed out")
+    {
         format!("could not connect to {host}. ssh said: {s}")
     } else if s.is_empty() {
         format!("ssh to {host} failed")

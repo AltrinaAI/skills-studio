@@ -214,7 +214,12 @@ fn sync_targets_in(home: &Path, root: &str) -> Result<Vec<SyncTarget>, String> {
 /// Place the skill into a destination's canonical dir — as a copy, or (when
 /// `link`) a symlink that shares the one source. Refuses to overwrite unless
 /// asked, and never places a skill onto itself.
-pub fn sync_skill(root: &str, target: &str, overwrite: bool, link: bool) -> Result<SyncResult, String> {
+pub fn sync_skill(
+    root: &str,
+    target: &str,
+    overwrite: bool,
+    link: bool,
+) -> Result<SyncResult, String> {
     let home = dirs::home_dir().ok_or_else(|| "No home directory.".to_string())?;
     sync_skill_in(&home, root, target, overwrite, link)
 }
@@ -238,7 +243,9 @@ fn sync_skill_in(
     let canon_root = std::fs::canonicalize(&root_path).unwrap_or_else(|_| root_path.clone());
     // A real (non-symlink) dir at dest that resolves to the source = placing onto itself.
     let dest_is_self_dir = !is_symlink(&dest)
-        && std::fs::canonicalize(&dest).map(|c| c == canon_root).unwrap_or(false);
+        && std::fs::canonicalize(&dest)
+            .map(|c| c == canon_root)
+            .unwrap_or(false);
     if dest_is_self_dir {
         return Err("The skill already lives here.".into());
     }
@@ -252,11 +259,17 @@ fn sync_skill_in(
 
     if link {
         symlink_dir(&canon_root, &dest)?;
-        Ok(SyncResult { dest: dest.to_string_lossy().into_owned(), linked: true })
+        Ok(SyncResult {
+            dest: dest.to_string_lossy().into_owned(),
+            linked: true,
+        })
     } else {
         let mut total: u64 = 0;
         copy_tree(&root_path, &dest, &mut total)?;
-        Ok(SyncResult { dest: dest.to_string_lossy().into_owned(), linked: false })
+        Ok(SyncResult {
+            dest: dest.to_string_lossy().into_owned(),
+            linked: false,
+        })
     }
 }
 
@@ -271,7 +284,8 @@ fn valid_skill_name(name: &str) -> bool {
     if name.starts_with('-') || name.ends_with('-') || name.contains("--") {
         return false;
     }
-    name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    name.bytes()
+        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
 /// The places a new skill can be created — the same destinations as sync, with
@@ -299,13 +313,18 @@ pub fn create_skill(target: &str, name: &str, content: &str) -> Result<String, S
 
 fn create_skill_in(home: &Path, target: &str, name: &str, content: &str) -> Result<String, String> {
     if !valid_skill_name(name) {
-        return Err("Name must be lowercase letters, digits and single hyphens (e.g. \"my-skill\").".into());
+        return Err(
+            "Name must be lowercase letters, digits and single hyphens (e.g. \"my-skill\").".into(),
+        );
     }
     let d = dest_by_id(target).ok_or_else(|| format!("Unknown skill location: {target}"))?;
     let dir = home.join(d.cohort[0]);
     let dest = dir.join(name);
     if dest.symlink_metadata().is_ok() {
-        return Err(format!("A skill named \"{name}\" already exists in {}.", dir.display()));
+        return Err(format!(
+            "A skill named \"{name}\" already exists in {}.",
+            dir.display()
+        ));
     }
     std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
     std::fs::write(dest.join("SKILL.md"), content).map_err(|e| e.to_string())?;
@@ -317,7 +336,11 @@ fn create_skill_in(home: &Path, target: &str, name: &str, content: &str) -> Resu
 /// id). Copies the tree under the skill's name — refusing to clobber unless
 /// `overwrite` — and returns the new root plus any `.env` pairs (kept out of the
 /// copy) for the caller to optionally load into the secret store.
-pub fn import_skill_folder(source: &str, target: &str, overwrite: bool) -> Result<ImportResult, String> {
+pub fn import_skill_folder(
+    source: &str,
+    target: &str,
+    overwrite: bool,
+) -> Result<ImportResult, String> {
     let home = dirs::home_dir().ok_or_else(|| "No home directory.".to_string())?;
     let src = resolve_root(source);
     if !src.join("SKILL.md").exists() {
@@ -329,7 +352,11 @@ pub fn import_skill_folder(source: &str, target: &str, overwrite: bool) -> Resul
 /// Import a skill from a `.zip` archive's bytes (the inverse of export). Extracts to
 /// a temp dir, imports it like a folder, then cleans up. Used by the desktop app
 /// (reads the chosen file) and the server (base64 upload via [`import_skill_zip_base64`]).
-pub fn import_skill_zip(bytes: &[u8], target: &str, overwrite: bool) -> Result<ImportResult, String> {
+pub fn import_skill_zip(
+    bytes: &[u8],
+    target: &str,
+    overwrite: bool,
+) -> Result<ImportResult, String> {
     let home = dirs::home_dir().ok_or_else(|| "No home directory.".to_string())?;
     let seq = IMPORT_SEQ.fetch_add(1, Ordering::Relaxed);
     let staging = std::env::temp_dir().join(format!("ass_import_{}_{}", std::process::id(), seq));
@@ -344,7 +371,11 @@ pub fn import_skill_zip(bytes: &[u8], target: &str, overwrite: bool) -> Result<I
 
 /// Convenience for the HTTP server (whose JSON bodies are text): decode a base64'd
 /// (optionally `data:` URL-prefixed) zip, then import it.
-pub fn import_skill_zip_base64(data: &str, target: &str, overwrite: bool) -> Result<ImportResult, String> {
+pub fn import_skill_zip_base64(
+    data: &str,
+    target: &str,
+    overwrite: bool,
+) -> Result<ImportResult, String> {
     // Tolerate a `data:application/zip;base64,…` prefix (base64 has no comma).
     let b64 = data.rsplit(',').next().unwrap_or(data).trim();
     let bytes = base64::engine::general_purpose::STANDARD
@@ -355,7 +386,12 @@ pub fn import_skill_zip_base64(data: &str, target: &str, overwrite: bool) -> Res
 
 /// Shared core: validate the staged skill dir, resolve its destination name, copy
 /// it into the home (minus any `.env`), and report the `.env` pairs separately.
-fn import_from_dir(home: &Path, src: &Path, target: &str, overwrite: bool) -> Result<ImportResult, String> {
+fn import_from_dir(
+    home: &Path,
+    src: &Path,
+    target: &str,
+    overwrite: bool,
+) -> Result<ImportResult, String> {
     // Destination name: the skill's declared `name` when valid (so the result is
     // spec-valid, name == folder), else the source directory name.
     let raw = std::fs::read_to_string(src.join("SKILL.md"))
@@ -372,8 +408,10 @@ fn import_from_dir(home: &Path, src: &Path, target: &str, overwrite: bool) -> Re
 
     // Importing an already-installed skill onto itself would copy a dir into itself.
     let canon_src = std::fs::canonicalize(src).unwrap_or_else(|_| src.to_path_buf());
-    let dest_is_self =
-        !is_symlink(&dest) && std::fs::canonicalize(&dest).map(|c| c == canon_src).unwrap_or(false);
+    let dest_is_self = !is_symlink(&dest)
+        && std::fs::canonicalize(&dest)
+            .map(|c| c == canon_src)
+            .unwrap_or(false);
     if dest_is_self {
         return Err("This skill already lives in the chosen location.".into());
     }
@@ -411,8 +449,10 @@ fn read_env_pairs(skill_root: &Path) -> Vec<ImportedSecret> {
     let Ok(body) = std::fs::read_to_string(skill_root.join(".env")) else {
         return Vec::new();
     };
-    let existing: std::collections::HashSet<String> =
-        crate::secrets::secret_keys().unwrap_or_default().into_iter().collect();
+    let existing: std::collections::HashSet<String> = crate::secrets::secret_keys()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
     crate::secrets::parse_dotenv(&body)
         .into_iter()
         .map(|(key, value)| {
@@ -438,7 +478,9 @@ fn frontmatter_name(raw: &str) -> Option<String> {
     let mut block = String::new();
     for line in lines {
         if line.trim_end() == "---" {
-            return serde_yaml::from_str::<FmName>(&block).ok().and_then(|f| f.name);
+            return serde_yaml::from_str::<FmName>(&block)
+                .ok()
+                .and_then(|f| f.name);
         }
         block.push_str(line);
         block.push('\n');
@@ -457,14 +499,19 @@ pub fn delete_skill(root: &str) -> Result<DeleteResult, String> {
         return Err("Not a skill directory (no SKILL.md).".into());
     }
     if !within_skills_container(&path) {
-        return Err("Refusing to delete: this folder isn't inside a known skills directory.".into());
+        return Err(
+            "Refusing to delete: this folder isn't inside a known skills directory.".into(),
+        );
     }
     if was_link {
         std::fs::remove_file(&path).map_err(|e| e.to_string())?;
     } else {
         std::fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
     }
-    Ok(DeleteResult { removed: path.to_string_lossy().into_owned(), was_link })
+    Ok(DeleteResult {
+        removed: path.to_string_lossy().into_owned(),
+        was_link,
+    })
 }
 
 /// Accept a proposed skill: move it out of its `generated-skills/` staging folder
@@ -478,7 +525,9 @@ pub fn promote_skill(root: &str) -> Result<PromoteResult, String> {
     if !path.join("SKILL.md").exists() {
         return Err("Not a skill directory (no SKILL.md).".into());
     }
-    let staging = path.parent().ok_or_else(|| "Invalid skill path.".to_string())?;
+    let staging = path
+        .parent()
+        .ok_or_else(|| "Invalid skill path.".to_string())?;
     if staging.file_name().and_then(|n| n.to_str()) != Some("generated-skills") {
         return Err("Not a proposed skill (it isn't inside a generated-skills/ folder).".into());
     }
@@ -487,13 +536,22 @@ pub fn promote_skill(root: &str) -> Result<PromoteResult, String> {
         .ok_or_else(|| "Invalid generated-skills location.".to_string())?;
     // The home it lands in must itself be a skills container, so accepting can't
     // drop a folder somewhere unexpected.
-    if !matches!(home.file_name().and_then(|n| n.to_str()), Some("skills" | "skills-cursor")) {
-        return Err("Refusing to accept: the generated-skills folder isn't inside a skills directory.".into());
+    if !matches!(
+        home.file_name().and_then(|n| n.to_str()),
+        Some("skills" | "skills-cursor")
+    ) {
+        return Err(
+            "Refusing to accept: the generated-skills folder isn't inside a skills directory."
+                .into(),
+        );
     }
     let name = skill_dir_name(&path).ok_or_else(|| "Invalid skill path.".to_string())?;
     let dest = home.join(&name);
     if dest.symlink_metadata().is_ok() {
-        return Err(format!("A skill named \"{name}\" already exists in {}.", home.display()));
+        return Err(format!(
+            "A skill named \"{name}\" already exists in {}.",
+            home.display()
+        ));
     }
     // Same filesystem in practice (staging is a subdir of the home), so a rename is
     // atomic; fall back to copy+remove if it ever crosses a device boundary. On any
@@ -507,18 +565,25 @@ pub fn promote_skill(root: &str) -> Result<PromoteResult, String> {
         }
         if let Err(e) = std::fs::remove_dir_all(&path) {
             let _ = std::fs::remove_dir_all(&dest);
-            return Err(format!("Couldn't remove the staged copy after accepting: {e}"));
+            return Err(format!(
+                "Couldn't remove the staged copy after accepting: {e}"
+            ));
         }
     }
     let canon = std::fs::canonicalize(&dest).unwrap_or(dest);
-    Ok(PromoteResult { root: canon.to_string_lossy().into_owned() })
+    Ok(PromoteResult {
+        root: canon.to_string_lossy().into_owned(),
+    })
 }
 
 /// True if some ancestor directory is a skills container (`skills` / `skills-cursor`).
 fn within_skills_container(path: &Path) -> bool {
     let mut cur = path.parent();
     while let Some(p) = cur {
-        if matches!(p.file_name().and_then(|n| n.to_str()), Some("skills" | "skills-cursor")) {
+        if matches!(
+            p.file_name().and_then(|n| n.to_str()),
+            Some("skills" | "skills-cursor")
+        ) {
             return true;
         }
         cur = p.parent();
@@ -527,7 +592,9 @@ fn within_skills_container(path: &Path) -> bool {
 }
 
 fn is_symlink(p: &Path) -> bool {
-    std::fs::symlink_metadata(p).map(|m| m.file_type().is_symlink()).unwrap_or(false)
+    std::fs::symlink_metadata(p)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
 }
 
 /// Remove a path whether it's a symlink, a file, or a directory tree.
@@ -587,10 +654,16 @@ mod tests {
 
     #[test]
     fn maps_agent_dirs() {
-        assert!(agent_user_dir("Claude Code").unwrap().ends_with(".claude/skills"));
+        assert!(agent_user_dir("Claude Code")
+            .unwrap()
+            .ends_with(".claude/skills"));
         assert!(agent_user_dir("Codex").unwrap().ends_with(".codex/skills"));
-        assert!(agent_user_dir("Cursor").unwrap().ends_with(".cursor/skills"));
-        assert!(agent_user_dir("OpenClaw").unwrap().ends_with(".openclaw/skills"));
+        assert!(agent_user_dir("Cursor")
+            .unwrap()
+            .ends_with(".cursor/skills"));
+        assert!(agent_user_dir("OpenClaw")
+            .unwrap()
+            .ends_with(".openclaw/skills"));
         assert!(agent_user_dir("Nope").is_none());
     }
 
@@ -635,7 +708,10 @@ mod tests {
         assert!(r2.linked);
         let claude_dest = home.join(".claude/skills/my-skill");
         assert!(is_symlink(&claude_dest));
-        assert!(claude_dest.join("SKILL.md").exists(), "link resolves to the skill");
+        assert!(
+            claude_dest.join("SKILL.md").exists(),
+            "link resolves to the skill"
+        );
 
         // Re-adding without overwrite is refused.
         assert!(sync_skill_in(&home, &src_str, "universal", false, false).is_err());
@@ -693,8 +769,14 @@ mod tests {
         let content = "---\nname: new-skill\ndescription: A test skill.\n---\n\nBody.\n";
         let root = create_skill_in(&home, "universal", "new-skill", content).unwrap();
         let dest = home.join(".agents/skills/new-skill");
-        assert_eq!(std::fs::canonicalize(&dest).unwrap().to_string_lossy(), root);
-        assert_eq!(std::fs::read_to_string(dest.join("SKILL.md")).unwrap(), content);
+        assert_eq!(
+            std::fs::canonicalize(&dest).unwrap().to_string_lossy(),
+            root
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest.join("SKILL.md")).unwrap(),
+            content
+        );
 
         // Creating onto an existing folder is refused.
         assert!(create_skill_in(&home, "universal", "new-skill", content).is_err());
@@ -728,14 +810,21 @@ mod tests {
         let dest = home.join(".agents/skills/my-skill");
         assert!(dest.join("SKILL.md").exists());
         assert!(dest.join("scripts/run.py").exists());
-        assert!(!dest.join(".env").exists(), ".env must be kept out of the imported folder");
+        assert!(
+            !dest.join(".env").exists(),
+            ".env must be kept out of the imported folder"
+        );
         assert_eq!(r.env.len(), 1);
         assert_eq!(r.env[0].key, "TOKEN");
         assert_eq!(r.env[0].value, "secret-value");
 
         // Re-importing without overwrite is refused; with overwrite it replaces.
         assert!(import_from_dir(&home, &src, "universal", false).is_err());
-        assert!(import_from_dir(&home, &src, "universal", true).unwrap().overwrote);
+        assert!(
+            import_from_dir(&home, &src, "universal", true)
+                .unwrap()
+                .overwrote
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -777,9 +866,15 @@ mod tests {
 
         let r = promote_skill(&staged.to_string_lossy()).unwrap();
         let dest = home.join("fresh-skill");
-        assert_eq!(std::fs::canonicalize(&dest).unwrap().to_string_lossy(), r.root);
+        assert_eq!(
+            std::fs::canonicalize(&dest).unwrap().to_string_lossy(),
+            r.root
+        );
         assert!(dest.join("SKILL.md").exists());
-        assert!(dest.join("scripts/run.py").exists(), "the whole folder moves, not just SKILL.md");
+        assert!(
+            dest.join("scripts/run.py").exists(),
+            "the whole folder moves, not just SKILL.md"
+        );
         assert!(!staged.exists(), "the staged copy is gone after accepting");
 
         // A skill that isn't under generated-skills/ can't be promoted.
@@ -790,7 +885,10 @@ mod tests {
         std::fs::create_dir_all(&staged2).unwrap();
         std::fs::write(staged2.join("SKILL.md"), "---\nname: fresh-skill\n---\nv2").unwrap();
         assert!(promote_skill(&staged2.to_string_lossy()).is_err());
-        assert!(dest.join("SKILL.md").exists(), "the already-accepted skill is untouched");
+        assert!(
+            dest.join("SKILL.md").exists(),
+            "the already-accepted skill is untouched"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -826,7 +924,10 @@ mod tests {
             let r = delete_skill(&link.to_string_lossy()).unwrap();
             assert!(r.was_link);
             assert!(!link.exists());
-            assert!(target.join("SKILL.md").exists(), "real skill survives unlink");
+            assert!(
+                target.join("SKILL.md").exists(),
+                "real skill survives unlink"
+            );
         }
 
         let _ = std::fs::remove_dir_all(&base);

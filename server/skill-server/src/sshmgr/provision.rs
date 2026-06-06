@@ -86,8 +86,9 @@ pub struct Platform {
 /// Detect the remote OS/arch via `uname -sm`. Linux/macOS only; a Windows remote (no
 /// `uname`) yields a clear not-yet-supported error.
 pub fn detect(host: &str) -> Result<Platform, String> {
-    let out = ssh::capture(host, "uname -sm")
-        .map_err(|e| format!("Couldn't reach the remote (note: Windows remotes aren't supported yet). {e}"))?;
+    let out = ssh::capture(host, "uname -sm").map_err(|e| {
+        format!("Couldn't reach the remote (note: Windows remotes aren't supported yet). {e}")
+    })?;
     let u = out.trim();
     let target = if u.starts_with("Linux") && u.contains("x86_64") {
         "x86_64-unknown-linux-musl"
@@ -98,7 +99,9 @@ pub fn detect(host: &str) -> Result<Platform, String> {
     } else if u.starts_with("Darwin") && u.contains("x86_64") {
         "x86_64-apple-darwin"
     } else if u.is_empty() {
-        return Err("Couldn't detect the remote platform (Windows remotes aren't supported yet).".into());
+        return Err(
+            "Couldn't detect the remote platform (Windows remotes aren't supported yet).".into(),
+        );
     } else {
         return Err(format!("Unsupported remote platform: {u}"));
     };
@@ -107,12 +110,18 @@ pub fn detect(host: &str) -> Result<Platform, String> {
 
 /// Ensure the version-pinned `skill-server` is installed on the remote; returns its
 /// path (with a literal `$HOME` for the remote shell to expand). Idempotent.
-pub fn ensure_installed(host: &str, platform: &Platform, app_version: &str) -> Result<String, String> {
+pub fn ensure_installed(
+    host: &str,
+    platform: &Platform,
+    app_version: &str,
+) -> Result<String, String> {
     let version = server_version(app_version);
     let bin = format!("$HOME/.skill-studio/server/{version}/skill-server");
     let url = format!("{}/skill-server-{}", base_url(&version), platform.target);
 
-    let script = INSTALL_SCRIPT.replace("__VERSION__", &version).replace("__URL__", &url);
+    let script = INSTALL_SCRIPT
+        .replace("__VERSION__", &version)
+        .replace("__URL__", &url);
 
     match ssh::run(host, &script) {
         Ok(_) => Ok(bin),
@@ -138,7 +147,10 @@ fn install_via_pipe(host: &str, version: &str, url: &str) -> Result<(), String> 
         .timeout_connect(Duration::from_secs(15))
         .timeout_read(Duration::from_secs(120))
         .build();
-    let resp = agent.get(url).call().map_err(|e| format!("Local download of {url} failed: {e}"))?;
+    let resp = agent
+        .get(url)
+        .call()
+        .map_err(|e| format!("Local download of {url} failed: {e}"))?;
     let mut bytes: Vec<u8> = Vec::new();
     resp.into_reader()
         .read_to_end(&mut bytes)
@@ -150,7 +162,10 @@ fn install_via_pipe(host: &str, version: &str, url: &str) -> Result<(), String> 
         let mut sum = String::new();
         let _ = sum_resp.into_reader().read_to_string(&mut sum);
         if let Some(expected) = sum.split_whitespace().next().filter(|s| !s.is_empty()) {
-            let actual: String = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
+            let actual: String = Sha256::digest(&bytes)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
             if !expected.eq_ignore_ascii_case(&actual) {
                 return Err("The downloaded skill-server failed its checksum check (possible corruption or tampering).".into());
             }

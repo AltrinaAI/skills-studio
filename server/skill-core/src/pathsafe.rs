@@ -87,15 +87,24 @@ mod tests {
         assert!(safe_resolve(root, "a/../../b").is_err());
         // A leading slash is stripped (treated as relative-to-root), matching the
         // original server behavior — so this stays inside the root, not an escape.
-        assert_eq!(safe_resolve(root, "/etc/passwd").unwrap(), root.join("etc/passwd"));
+        assert_eq!(
+            safe_resolve(root, "/etc/passwd").unwrap(),
+            root.join("etc/passwd")
+        );
         assert!(safe_resolve(root, "ok/file.txt").is_ok());
         assert!(safe_resolve(root, "nested/../ok.txt").is_ok());
     }
 
     #[test]
     fn normalize_collapses_dots() {
-        assert_eq!(normalize_lexical(Path::new("/a/b/../c")), PathBuf::from("/a/c"));
-        assert_eq!(normalize_lexical(Path::new("/a/./b")), PathBuf::from("/a/b"));
+        assert_eq!(
+            normalize_lexical(Path::new("/a/b/../c")),
+            PathBuf::from("/a/c")
+        );
+        assert_eq!(
+            normalize_lexical(Path::new("/a/./b")),
+            PathBuf::from("/a/b")
+        );
     }
 
     #[cfg(unix)]
