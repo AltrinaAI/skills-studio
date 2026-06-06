@@ -5,6 +5,16 @@
 members = ["client/desktop", "server/skill-core", "server/skill-server", "server/skill-term"]
 resolver = "2"
 
+# THE single source of truth for the version across the whole repo. Every crate sets
+# `version.workspace = true`, and the desktop app (whose tauri.conf.json has no
+# `version`) plus the standalone skill-server both read it via CARGO_PKG_VERSION. The
+# committed value is a dev placeholder — real versions come from the pushed git tag,
+# which CI stamps in right here (see .github/workflows/release.yml). `0.0.0` ⇒
+# "unreleased", so remote-install falls back to the latest release asset (see
+# server/skill-server/src/sshmgr/provision.rs).
+[workspace.package]
+version = "0.0.0"
+
 [profile.release]
 panic = "abort"
 codegen-units = 1

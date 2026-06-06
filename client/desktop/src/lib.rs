@@ -8,7 +8,7 @@
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 use skill_core::engine;
-use skill_server::{ServerConfig, SshRemoteControl};
+use skill_server::{init_logging, ServerConfig, SshRemoteControl};
 
 /// Locate the bundled `llama-server` so the on-device commit-message generator
 /// runs with zero setup. Checks the production bundle (resource dir) then the
@@ -44,6 +44,11 @@ fn find_bundled_engine(app: &tauri::App) -> Option<std::path::PathBuf> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Logger first (shared with the in-process server; stderr, RUST_LOG-gated).
+    // Visible under `npm run dev`; in a packaged app stderr has nowhere to go —
+    // an on-disk sink is a deferred follow-up.
+    init_logging();
+
     // The SSH connection manager is created in `setup` (it needs the app version to
     // provision the matching remote `skill-server`); this slot hands it to the exit
     // handler so a live session is torn down on quit (no orphaned remote/tunnel).
@@ -97,7 +102,7 @@ pub fn run() {
                 Err(e) => {
                     // Dev tolerates this — an external skill-server may already hold
                     // 8765 and back the Vite proxy. Prod logs the failure.
-                    eprintln!("skill-studio: in-process server did not start: {e}");
+                    log::error!("in-process server did not start: {e}");
                     8765
                 }
             };

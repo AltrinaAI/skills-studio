@@ -30,6 +30,32 @@ mod sshmgr;
 
 pub use sshmgr::SshRemoteControl;
 
+/// Install the process-wide logger: stderr sink, level via `RUST_LOG`. Idempotent
+/// and a no-op if a global logger is already set, so it's safe to call from either
+/// entry point — the standalone `skill-server` binary (`main.rs`) or the desktop
+/// shell that hosts this server in-process.
+///
+/// Output is pinned to **stderr** so it never corrupts the `SKILL_SERVER_READY
+/// port=N` line the desktop reads off this process's *stdout* (see `main.rs`). The
+/// default is intentionally quiet (`warn`, with the `skill_*` crates at `info`), so
+/// a packaged/remote build is near-silent; for development raise it with e.g.
+/// `RUST_LOG=skill_server=debug,skill_core=debug,skill_term=debug`.
+///
+/// `log` + `env_logger` (not `tracing`) is deliberate: the server is synchronous
+/// (`tiny_http` + `std::thread`, no tokio) and this is dev logging, not tracing.
+/// The `log::*` call sites stay portable — an OpenTelemetry Logs exporter
+/// (`opentelemetry-appender-log`) can replace this subscriber later with no
+/// call-site changes.
+pub fn init_logging() {
+    let _ = env_logger::Builder::from_env(
+        env_logger::Env::default()
+            .default_filter_or("warn,skill_server=info,skill_core=info,skill_term=info"),
+    )
+    .target(env_logger::Target::Stderr)
+    .format_timestamp_millis()
+    .try_init();
+}
+
 // ───────────────────────────── public API ─────────────────────────────
 
 // ── Remote-SSH connection manager (desktop only) ──
@@ -273,9 +299,28 @@ fn worker_loop(server: &Server, ctx: &ServerCtx) {
     }
 }
 
+/// One-line access/error log for an outgoing reply, the single point through which
+/// every locally-handled and proxied request flows. `<400` logs at `debug` (a
+/// per-request access trace, off by default — enable with `RUST_LOG=…=debug`);
+/// `>=400` logs at `warn` with the error detail pulled from our uniform
+/// `{"error": …}` body, so server-side failures that previously only reached the
+/// client are now visible at the default level.
+fn log_reply(request: &Request, status: u16, body: &[u8]) {
+    if status < 400 {
+        log::debug!("{} {} -> {}", request.method().as_str(), request.url(), status);
+        return;
+    }
+    let detail = serde_json::from_slice::<Value>(body)
+        .ok()
+        .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_owned))
+        .unwrap_or_default();
+    log::warn!("{} {} -> {} {}", request.method().as_str(), request.url(), status, detail);
+}
+
 /// Serialize a `Reply` onto the wire with the standard CORS + no-store headers, then
 /// any reply-specific `extra` headers. Shared by local handlers and the proxy.
 pub(crate) fn send_reply(request: Request, reply: Reply) {
+    log_reply(&request, reply.status, &reply.body);
     let mut response = Response::from_data(reply.body).with_status_code(reply.status);
     let headers = [
         ("Content-Type", reply.content_type.as_str()),
@@ -603,6 +648,13 @@ pub(crate) fn acquire_stream_slot() -> Option<StreamSlot> {
 }
 
 pub(crate) fn reply_status(request: Request, status: u16, error: &str) {
+    // Status-only replies (401/404/503/proxy 502, …) bypass `send_reply`, so log
+    // them here too — `error` is already the human detail, no body parse needed.
+    if status >= 400 {
+        log::warn!("{} {} -> {} {}", request.method().as_str(), request.url(), status, error);
+    } else {
+        log::debug!("{} {} -> {}", request.method().as_str(), request.url(), status);
+    }
     let body = serde_json::to_vec(&json!({ "error": error })).unwrap_or_default();
     let mut resp = Response::from_data(body).with_status_code(StatusCode(status));
     for (k, val) in [("Content-Type", "application/json"), ("Access-Control-Allow-Origin", "*")] {

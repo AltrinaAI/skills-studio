@@ -135,7 +135,12 @@ pub fn proxy_sse(request: Request, url: &str, target: &RemoteTarget) {
     {
         Ok(r) => r,
         Err(ureq::Error::Status(code, _)) => return reply_status(request, code, "remote stream error"),
-        Err(ureq::Error::Transport(_)) => return reply_status(request, 502, "remote unreachable"),
+        Err(ureq::Error::Transport(t)) => {
+            // Keep the transport detail (host/port/cause) in the log — it's the prime
+            // clue for a flaky tunnel; the client only sees the generic message.
+            log::error!("proxy(sse) {url}: remote unreachable: {t}");
+            return reply_status(request, 502, "remote unreachable");
+        }
     };
     let mut up = resp.into_reader();
 

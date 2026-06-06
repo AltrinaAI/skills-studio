@@ -153,9 +153,8 @@ pub fn prefetch_model() {
     std::thread::spawn(|| {
         if let Err(e) = ensure_model() {
             // Don't fail startup; the on-demand path surfaces the error in the UI.
-            if std::env::var_os("SKILL_STUDIO_COMMIT_DEBUG").is_some() {
-                eprintln!("skill-studio: model prefetch failed: {e}");
-            }
+            // Now RUST_LOG-gated (shown by default) instead of needing a debug env var.
+            log::warn!("model prefetch failed: {e}");
         }
     });
 }

@@ -76,7 +76,12 @@ export async function refresh(): Promise<void> {
     window.location.reload(); // user-initiated connect succeeded → rebind to the remote
     return;
   }
-  if (status.state !== "connected") pendingConnect = false;
+  // Only a TERMINAL outcome cancels the pending reload: a failed/aborted connect
+  // ("error"/"idle"). The transient CONNECTING states (detecting/installing/launching/
+  // forwarding) are normal progress — clearing pendingConnect on those (as `!== connected`
+  // did) defeats the reload that rebinds the whole window (discovered skills, files, git,
+  // secrets, terminals) to the remote once it reaches "connected".
+  if (status.state === "error" || status.state === "idle") pendingConnect = false;
 
   // The tunnel dropped out from under a live session (network loss / remote crash):
   // rebind to Local rather than leaving the window pointed at a dead remote.

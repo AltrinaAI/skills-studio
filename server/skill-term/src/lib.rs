@@ -294,6 +294,7 @@ pub fn sweep_orphans() {
                 .map(|pid| owner_alive(pid, session_opt_u64(&s.id, "@ass_owner_start")))
                 .unwrap_or(false);
             if !alive {
+                log::info!("reaping orphaned terminal {} (owning process gone)", s.id);
                 let _ = kill_session(&s.id);
             }
         }
@@ -412,6 +413,7 @@ pub fn create_session(
         .status()
         .map_err(|e| format!("Couldn't start tmux: {e}"))?;
     if !status.success() {
+        log::error!("tmux new-session failed (agent={}, cwd={cwd_resolved})", opt.agent);
         return Err("tmux couldn't create the session (is the working directory valid?).".into());
     }
 

@@ -1,6 +1,6 @@
 [package]
 name = "skill-core"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "Transport-agnostic skill filesystem + discovery logic (no GUI deps)"
 
@@ -9,6 +9,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 walkdir = "2"
+# Logging facade only (no subscriber — a binary installs one). Already in the
+# lockfile transitively, so this is free and keeps skill-core a pure library.
+log = "0.4"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 dirs = "5"
 base64 = "0.22"

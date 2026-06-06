@@ -1,6 +1,6 @@
 [package]
 name = "skill-server"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "The backend: HTTP face of skill-core + skill-term (/api + SSE), serving the built UI. Runs in-process in the desktop (loopback) or standalone on a remote host."
 
@@ -28,3 +28,9 @@ ureq = "2"
 dirs = "5"
 getrandom = "0.2"
 sha2 = "0.10"
+# Logging: the `log` facade plus the `env_logger` subscriber installed by
+# `init_logging()` (the desktop calls that too, so this is the ONLY crate carrying
+# a subscriber). default-features=false drops regex + color to keep the static-musl
+# remote binary lean; `humantime` re-enables readable timestamps. All pure-Rust.
+log = "0.4"
+env_logger = { version = "0.11", default-features = false, features = ["humantime"] }

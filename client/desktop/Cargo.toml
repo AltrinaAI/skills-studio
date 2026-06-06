@@ -1,6 +1,6 @@
 [package]
 name = "skill-studio"
-version = "0.1.0"
+version.workspace = true
 description = "View and edit Agent Skills"
 authors = ["General Agency"]
 edition = "2021"
@@ -20,3 +20,6 @@ skill-term = { path = "../../server/skill-term" }
 # Backend (incl. the SSH connection manager) — the desktop wires it into its
 # in-process server; the ssh/provisioning code lives here, not in the shell.
 skill-server = { path = "../../server/skill-server" }
+# Logging facade for the shell's own diagnostics; the subscriber comes from
+# `skill_server::init_logging()`, so no `env_logger` dependency is needed here.
+log = "0.4"

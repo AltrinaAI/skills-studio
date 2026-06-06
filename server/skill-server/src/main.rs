@@ -21,9 +21,13 @@
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
-use skill_server::{spawn, RemoteControl, ServerConfig, SshRemoteControl};
+use skill_server::{init_logging, spawn, RemoteControl, ServerConfig, SshRemoteControl};
 
 fn main() {
+    // Install the logger first (stderr; level via RUST_LOG) so even early failures
+    // are captured. Keep it off stdout — that's the SKILL_SERVER_READY channel.
+    init_logging();
+
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("skill-server {}", env!("CARGO_PKG_VERSION"));
@@ -78,7 +82,7 @@ fn main() {
     let handle = match spawn(cfg) {
         Ok(h) => h,
         Err(e) => {
-            eprintln!("skill-server: failed to bind {bind}: {e}");
+            log::error!("failed to bind {bind}: {e}");
             std::process::exit(1);
         }
     };
