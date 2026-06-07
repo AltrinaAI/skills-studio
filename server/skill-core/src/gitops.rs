@@ -2,9 +2,10 @@
 // so no native git library is bundled. Every op is a no-op or a clear error when
 // git is unavailable or the directory isn't a repository.
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde::Serialize;
+
+use crate::process::hidden_command;
 
 #[derive(Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -92,7 +93,7 @@ pub struct CommitDetail {
 }
 
 fn git(root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
-    Command::new("git")
+    hidden_command("git")
         .arg("-C")
         .arg(root)
         .args(args)
@@ -123,7 +124,7 @@ fn strip_repo_prefix(path: &str, prefix: &str) -> String {
 }
 
 pub fn git_available() -> bool {
-    Command::new("git")
+    hidden_command("git")
         .arg("--version")
         .output()
         .map(|o| o.status.success())

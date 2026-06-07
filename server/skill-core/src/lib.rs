@@ -7,6 +7,7 @@ pub mod filetypes;
 pub mod gitops;
 pub mod gpu;
 pub mod pathsafe;
+pub mod process;
 pub mod secrets;
 pub mod skill;
 pub mod sync;
