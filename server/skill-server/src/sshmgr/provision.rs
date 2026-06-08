@@ -55,6 +55,30 @@ chmod +x "$tmp"
 mv -f "$tmp" "$dir/skill-server"
 "#;
 
+/// How many version-pinned `skill-server` binaries to keep on a remote. Each connect
+/// provisions one under `~/.skill-studio/server/<version>/`; without pruning, iterating
+/// on the app (a new version per release) would pile them up forever. We retain the most
+/// recently used few and delete the rest.
+const KEEP_VERSIONS: usize = 3;
+
+/// Remote-side prune: mark the version we just provisioned as most-recently-used, then
+/// delete all but the newest `KEEP_VERSIONS` version directories under
+/// `~/.skill-studio/server`. mtime-ordered with a touch-on-use, so it's effectively LRU
+/// and the version we're about to launch is always kept. Deleting a binary another client
+/// still has running is safe on Unix (the live process keeps its open inode); that client
+/// just re-downloads on its next connect. `__VERSION__`/`__KEEP_PLUS_1__` are substituted
+/// (raw string ⇒ literal shell braces, like the install scripts above).
+const PRUNE_SCRIPT: &str = r#"set -e
+root="$HOME/.skill-studio/server"
+cur="__VERSION__"
+[ -d "$root" ] || exit 0
+[ -e "$root/$cur" ] && touch "$root/$cur" 2>/dev/null || true
+ls -1dt "$root"/*/ 2>/dev/null | tail -n +__KEEP_PLUS_1__ | while IFS= read -r d; do
+  rm -rf "$d"
+done
+exit 0
+"#;
+
 /// The release version whose `skill-server` asset we prefer. Defaults to the running
 /// app's version (`app_version`, from `tauri.conf.json`, which CI stamps from the
 /// release tag); override with `SKILL_STUDIO_SERVER_VERSION`. A released build's version
@@ -126,11 +150,15 @@ pub fn ensure_installed(host: &str, platform: &Platform, app_version: &str) -> R
     for url in &urls {
         let script = INSTALL_SCRIPT.replace("__VERSION__", &version).replace("__URL__", url);
         match ssh::run(host, &script) {
-            Ok(_) => return Ok(bin),
+            Ok(_) => {
+                prune_old_versions(host, &version);
+                return Ok(bin);
+            }
             // Exit 3 = the remote has neither curl nor wget → download here and pipe it
             // over the same ssh transport (works for no-internet remotes / through ProxyJump).
             Err(e) if e.code == Some(3) => {
                 install_via_pipe(host, &version, &urls)?;
+                prune_old_versions(host, &version);
                 return Ok(bin);
             }
             // Exit 4 = the downloaded binary didn't match the published checksum.
@@ -151,6 +179,19 @@ pub fn ensure_installed(host: &str, platform: &Platform, app_version: &str) -> R
         platform.target,
         urls.join(", ")
     ))
+}
+
+/// Best-effort cleanup so remotes don't accumulate a `skill-server` binary for every
+/// version ever connected with (see [`KEEP_VERSIONS`]). Runs on every successful
+/// connect, after the current version is in place; failures are logged and ignored —
+/// keeping the remote tidy must never block connecting.
+fn prune_old_versions(host: &str, version: &str) {
+    let script = PRUNE_SCRIPT
+        .replace("__VERSION__", version)
+        .replace("__KEEP_PLUS_1__", &(KEEP_VERSIONS + 1).to_string());
+    if let Err(e) = ssh::run(host, &script) {
+        log::debug!("pruning old skill-server versions on {host} failed (ignored): {}", e.message);
+    }
 }
 
 /// No-downloader fallback: fetch the asset on THIS machine (verifying its checksum
