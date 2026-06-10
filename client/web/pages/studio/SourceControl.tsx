@@ -139,7 +139,7 @@ export default function SourceControl({ root, dirName }: { root: string; dirName
   const [actionErr, setActionErr] = useState<string | null>(null);
 
   // VS Code-style accordion: each section collapses independently, but its header
-  // stays visible — so GitHub is always reachable even under a long Versions list.
+  // stays visible — so the Remote panel is always reachable even under a long log.
   const [open, setOpen] = useState({ changes: true, versions: true, github: true });
   const toggle = (k: "changes" | "versions" | "github") => setOpen((o) => ({ ...o, [k]: !o[k] }));
 
@@ -519,9 +519,10 @@ export default function SourceControl({ root, dirName }: { root: string; dirName
             )}
           </section>
 
-          {/* GitHub — the remote half of version history (publish / sync / disconnect).
-              Content-sized up to its adjustable cap while Versions is open; free to
-              use the remaining space when Versions is collapsed. */}
+          {/* Remote — the remote half of version history (publish / sync / disconnect),
+              named platform-neutrally since GitHub is just one of several git hosts
+              it connects to. Content-sized up to its adjustable cap while Versions is
+              open; free to use the remaining space when Versions is collapsed. */}
           <RowResizeHandle onDragTo={dragGithub} active={open.github && open.versions} />
           <section
             className="flex min-h-0 flex-col overflow-hidden"
@@ -533,7 +534,7 @@ export default function SourceControl({ root, dirName }: { root: string; dirName
                 : undefined
             }
           >
-            <PanelHeader title="GitHub" open={open.github} onToggle={() => toggle("github")} />
+            <PanelHeader title="Remote" open={open.github} onToggle={() => toggle("github")} />
             {open.github && (
               <div className="min-h-0 flex-1 overflow-auto px-3 pb-3 pt-1">
                 <GitHubSection root={root} dirName={dirName} />
