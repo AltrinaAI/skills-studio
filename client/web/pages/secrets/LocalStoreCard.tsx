@@ -1,11 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge, Spinner } from "@/components/ui";
 import { agentColor } from "@/lib/agents";
 import { useConfirm } from "@/components/useConfirm";
 import * as api from "@/lib/api";
-import type { SecretEntry, SecretsStatus } from "@/lib/api";
+import type { ImportedSecret, SecretEntry, SecretsStatus } from "@/lib/api";
 
 const btnPrimary =
   "rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-accent-fg transition-opacity hover:opacity-90 disabled:opacity-40";
@@ -39,6 +39,10 @@ export default function LocalStoreCard() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  // ".env import": parsed entries awaiting the user's pick (null = no import open).
+  const [importing, setImporting] = useState<ImportedSecret[] | null>(null);
+  const [picked, setPicked] = useState<Record<string, boolean>>({});
+  const envInputRef = useRef<HTMLInputElement>(null);
   const confirm = useConfirm();
 
   const refresh = useCallback(async () => {
@@ -88,6 +92,46 @@ export default function LocalStoreCard() {
       await refresh();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Couldn’t delete secret");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Read a chosen .env file, parse it server-side (same parser the zip import
+  // uses), and stage the entries for review — applying is per-key secretSet.
+  const previewEnvFile = async (file: File) => {
+    setErr(null);
+    setNote(null);
+    try {
+      const entries = await api.secretsPreviewEnv(await file.text());
+      if (entries.length === 0) {
+        setErr("No secrets found in that file — expected KEY=value lines.");
+        return;
+      }
+      const init: Record<string, boolean> = {};
+      entries.forEach((e) => (init[e.key] = true));
+      setPicked(init);
+      setImporting(entries);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Couldn’t read the file");
+    }
+  };
+
+  const applyImport = async (entries: ImportedSecret[]) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      let n = 0;
+      for (const e of entries) {
+        if (!picked[e.key]) continue;
+        await api.secretSet(e.key, e.value);
+        n += 1;
+      }
+      setImporting(null);
+      setNote(`Imported ${n} secret${n === 1 ? "" : "s"}.`);
+      await refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Couldn’t save secrets");
     } finally {
       setBusy(false);
     }
@@ -173,6 +217,65 @@ export default function LocalStoreCard() {
               Save
             </button>
           </form>
+
+          {importing ? (
+            <div className="space-y-2 rounded-lg border border-border bg-panel px-3 py-2.5">
+              <p className="text-xs text-muted">
+                Found {importing.length} secret{importing.length === 1 ? "" : "s"} — import the checked ones:
+              </p>
+              <ul className="space-y-1.5">
+                {importing.map((e) => (
+                  <li key={e.key}>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={!!picked[e.key]}
+                        onChange={(ev) => setPicked((p) => ({ ...p, [e.key]: ev.target.checked }))}
+                        className="accent-accent"
+                      />
+                      <span className="font-mono text-xs text-fg">{e.key}</span>
+                      {e.exists && (
+                        <span className="rounded-full bg-warn/15 px-1.5 py-0.5 text-[0.6rem] font-medium uppercase tracking-wide text-warn">
+                          overwrites
+                        </span>
+                      )}
+                    </label>
+                  </li>
+                ))}
+              </ul>
+              <div className="flex justify-end gap-2">
+                <button type="button" onClick={() => setImporting(null)} disabled={busy} className={btnGhost}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void applyImport(importing)}
+                  disabled={busy || !importing.some((e) => picked[e.key])}
+                  className={btnPrimary}
+                >
+                  {busy ? "Importing…" : "Import"}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => envInputRef.current?.click()} disabled={busy} className={btnGhost}>
+                Import .env…
+              </button>
+              <span className="text-[0.7rem] text-faint">Load a teammate’s exported .env into your store.</span>
+              <input
+                ref={envInputRef}
+                type="file"
+                accept=".env,text/plain"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (file) void previewEnvFile(file);
+                }}
+              />
+            </div>
+          )}
 
           {secrets.length > 0 ? (
             <ul className="space-y-0 overflow-hidden rounded-lg border border-border">

@@ -90,7 +90,7 @@ pub struct SetupResult {
     skill_installed: bool,
 }
 
-fn config_dir() -> Result<PathBuf, String> {
+pub(crate) fn config_dir() -> Result<PathBuf, String> {
     if let Ok(x) = std::env::var("XDG_CONFIG_HOME") {
         if !x.is_empty() {
             return Ok(PathBuf::from(x).join("skill-studio"));
@@ -108,14 +108,14 @@ fn env_path() -> Result<PathBuf, String> {
 }
 
 #[cfg(unix)]
-fn set_mode(path: &Path, mode: u32) {
+pub(crate) fn set_mode(path: &Path, mode: u32) {
     use std::os::unix::fs::PermissionsExt;
     let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
 }
 #[cfg(not(unix))]
-fn set_mode(_path: &Path, _mode: u32) {}
+pub(crate) fn set_mode(_path: &Path, _mode: u32) {}
 
-fn ensure_dir() -> Result<PathBuf, String> {
+pub(crate) fn ensure_dir() -> Result<PathBuf, String> {
     let dir = config_dir()?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     set_mode(&dir, 0o700);
@@ -289,6 +289,30 @@ fn unquote_dotenv(s: &str) -> String {
         return out;
     }
     s.to_string()
+}
+
+/// A `.env` pair offered to the store (from a skill import or a pasted/uploaded
+/// `.env` file), flagged when a secret of that name already exists (loading
+/// would overwrite it).
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct DotenvEntry {
+    pub key: String,
+    pub value: String,
+    pub exists: bool,
+}
+
+/// Parse a `.env` body into store-ready entries, flagging keys that already
+/// exist. The preview half of ".env import" — the caller applies the chosen
+/// entries via [`secret_set`]. The `exists` flags are advisory, so an
+/// unreadable store degrades to "no flags" rather than failing the parse.
+pub fn preview_dotenv(body: &str) -> Vec<DotenvEntry> {
+    let existing: std::collections::HashSet<String> =
+        secret_keys().unwrap_or_default().into_iter().collect();
+    parse_dotenv(body)
+        .into_iter()
+        .map(|(key, value)| DotenvEntry { exists: existing.contains(&key), key, value })
+        .collect()
 }
 
 pub fn secret_set(key: &str, value: &str) -> Result<(), String> {

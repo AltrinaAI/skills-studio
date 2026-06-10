@@ -87,6 +87,34 @@ The desktop runs the server **in-process** by calling `skill_server::spawn(Serve
 ([client/desktop/src/lib.rs](client/desktop/src/lib.rs)); `ServerConfig` already carries
 the `token` (bearer-auth) and `examples_base` seams the remote case will use.
 
+## Terminals: persistent by design
+
+Agent terminals are tmux sessions (`ass-*`); the backend is only a **bridge**
+(per-client `tmux attach` in a PTY). The lifetime policy, in order of intent:
+
+1. **A terminal outlives everything except an explicit kill.** Closing the
+   browser tab, quitting the desktop app, dropping an SSH connection, or
+   restarting/upgrading a backend never stops the agent running inside —
+   that's the point: kick off a long coding-agent run, come back from any
+   client later.
+2. **The `ass-*` namespace is machine-wide and deliberately unfiltered.** Every
+   backend lists/attaches/kills ALL studio sessions regardless of which process
+   created them, so any client of any backend can pick up any agent. Session
+   names embed the creating pid (`ass-<pid>-<secs>-<seq>`) only so two backends
+   can't mint colliding names; `@ass_owner_pid` is provenance metadata, not a
+   lifecycle key.
+3. **The only automatic reaping is a high-bar GC** (`skill_term::sweep_stale`,
+   run at backend startup): a session is collected only when it's unattached,
+   every pane is back at a plain shell (the agent *exited*), **and** it has
+   been idle for a week. A live agent or a watching client always blocks it.
+   Finished runs therefore stay reviewable, but dead shells can't pile up
+   forever.
+
+Multiple backends on one machine are a supported state (desktop + standalone
+dev server, or a test instance on another port): they share the tmux namespace
+safely, and the on-device inference engine reaper only kills *orphaned*
+engines (reparented to init) — never a sibling backend's live child.
+
 ## The connection manager (VS Code "Remote - SSH")
 
 Implemented as a **local proxy switchboard** — the realization of "local is just remote

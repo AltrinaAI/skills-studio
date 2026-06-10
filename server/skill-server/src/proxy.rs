@@ -5,6 +5,7 @@
 //! origin, so the token never reaches it and the SSE `EventSource` (which has no
 //! header API) works unchanged.
 use std::io::{Read, Write};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use serde_json::json;
@@ -19,6 +20,26 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// (e.g. on-device commit-message generation) isn't cut off, but bounded so a hung
 /// remote can't pin a local worker thread forever.
 const READ_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// One process-wide pooled agent for all buffered proxy calls. `ureq::Agent` is an
+/// `Arc` internally (cheap to clone) and keeps a per-host keep-alive connection
+/// pool — so reusing it lets serialized terminal input (one POST per keystroke
+/// batch, now on the critical path) reuse the SSH-tunnel connection instead of
+/// opening a fresh TCP + SSH channel each time, roughly halving per-batch latency.
+/// The pool keys on host:port, so a reconnected tunnel (new local port) never
+/// reuses a stale connection. NOT shared with `proxy_sse`, which must run with no
+/// read timeout for its lifetime-long stream.
+fn buffered_agent() -> ureq::Agent {
+    static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+    AGENT
+        .get_or_init(|| {
+            ureq::AgentBuilder::new()
+                .timeout_connect(CONNECT_TIMEOUT)
+                .timeout_read(READ_TIMEOUT)
+                .build()
+        })
+        .clone()
+}
 
 /// Request headers we must NOT copy upstream: hop-by-hop, the length (the body is
 /// re-sent), our own injected auth, and `Accept-Encoding` (let ureq negotiate gzip).
@@ -73,10 +94,7 @@ pub fn proxy_buffered(mut request: Request, method: &Method, url: &str, target: 
     let mut body: Vec<u8> = Vec::new();
     let _ = request.as_reader().read_to_end(&mut body);
 
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(CONNECT_TIMEOUT)
-        .timeout_read(READ_TIMEOUT)
-        .build();
+    let agent = buffered_agent();
     let mut req = agent.request(method.as_str(), &upstream_url(target, url));
     for (k, v) in &fwd {
         req = req.set(k, v);

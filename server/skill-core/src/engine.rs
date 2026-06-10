@@ -561,8 +561,10 @@ pub fn shutdown() {
 /// Kill any stray `llama-server` left over from a previous run that was
 /// hard-killed before it could reap its engine (e.g. a `tauri dev` rebuild that
 /// SIGKILLs the app). Matches OUR resolved engine binary path, so it never
-/// touches an unrelated llama-server the user runs. Call once at startup —
-/// before any engine is spawned — mirroring `skill_term::sweep_orphans`.
+/// touches an unrelated llama-server the user runs — and ONLY processes that
+/// are actually orphaned (reparented to init): a live engine is the direct
+/// child of the backend that spawned it, so a second backend starting up must
+/// never shoot down the first one's engine mid-generation.
 pub fn reap_orphans() {
     let needle = engine_binary().to_string_lossy().into_owned();
     if needle.is_empty() {
@@ -570,7 +572,7 @@ pub fn reap_orphans() {
     }
     #[cfg(unix)]
     {
-        let Ok(out) = Command::new("ps").args(["-eo", "pid=,args="]).output() else {
+        let Ok(out) = Command::new("ps").args(["-eo", "pid=,ppid=,args="]).output() else {
             return;
         };
         if !out.status.success() {
@@ -578,22 +580,31 @@ pub fn reap_orphans() {
         }
         let me = std::process::id();
         for line in String::from_utf8_lossy(&out.stdout).lines() {
-            let Some((pid_s, args)) = line.trim_start().split_once(char::is_whitespace) else {
+            let mut parts = line.split_whitespace();
+            let (Some(pid_s), Some(ppid_s)) = (parts.next(), parts.next()) else {
                 continue;
             };
+            let args = parts.collect::<Vec<_>>().join(" ");
             if !args.contains(&needle) {
                 continue;
             }
-            if let Ok(pid) = pid_s.parse::<u32>() {
-                if pid != me {
-                    let _ = Command::new("kill").arg(pid.to_string()).output(); // SIGTERM
-                }
+            let (Ok(pid), Ok(ppid)) = (pid_s.parse::<u32>(), ppid_s.parse::<u32>()) else {
+                continue;
+            };
+            // ppid 1 = reparented to init ⇒ its backend is gone. (Under a
+            // subreaper the orphan reparents elsewhere and is missed — the
+            // conservative direction: we'd rather leave a stray engine than
+            // kill a sibling backend's live one.)
+            if pid != me && ppid == 1 {
+                let _ = Command::new("kill").arg(pid.to_string()).output(); // SIGTERM
             }
         }
     }
     #[cfg(windows)]
     {
-        // Best-effort on Windows: kill our bundled engine by image name.
+        // Best-effort on Windows: kill our bundled engine by image name. No
+        // cheap parent check here, so this CAN hit a sibling backend's engine —
+        // acceptable for the rare run-two-backends-on-Windows case.
         let _ = Command::new("taskkill").args(["/F", "/IM", "llama-server.exe"]).output();
     }
 }

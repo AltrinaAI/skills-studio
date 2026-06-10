@@ -172,6 +172,22 @@ export async function exportZip(root: string, vars: string[] = []): Promise<void
 /** Scan the skill's files for which managed secrets it references (auto-detect). */
 export const detectRequiredEnv = (root: string) => http<string[]>("POST", "detect-required-env", { root });
 
+/**
+ * Download the skill's secrets as a plain-text `.env` file (browser download).
+ * `vars` = the skill's declared env names; only those present in the store are
+ * included. Deliberately plain text: the values never travel in the repo, so
+ * this is the explicit hand-off the user shares over a channel they trust.
+ */
+export function downloadEnv(root: string, vars: string[]): void {
+  const q = new URLSearchParams({ root, vars: vars.join(",") });
+  const a = document.createElement("a");
+  a.href = `${API_BASE}/api/download-env?${q.toString()}`;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 // --- folder browsing (server-side; backs the in-app FolderPicker) ---
 export interface DirEntry {
   name: string;
@@ -301,6 +317,11 @@ export const importSkillFolder = (source: string, target: string, overwrite: boo
 /** Import from an uploaded `.zip` (base64 bytes, decoded server-side). */
 export const importSkillZipUpload = (data: string, target: string, overwrite: boolean) =>
   http<ImportResult>("POST", "import-zip", { data, target, overwrite });
+
+/** Import by cloning a skill repository (GitHub/GitLab/any git clone URL). The
+ *  clone keeps its origin, so the skill arrives already connected for sync. */
+export const importSkillFromRemote = (url: string, target: string, overwrite: boolean) =>
+  http<ImportResult>("POST", "import-remote", { url, target, overwrite });
 
 // --- delete a skill (guarded; unlinks a synced copy, else removes the folder) ---
 export interface DeleteResult {
@@ -456,6 +477,116 @@ export const gitExitVersion = (root: string) => http<GitInfo>("POST", "git-exit-
 export const gitKeepVersion = (root: string, message: string) =>
   http<{ sha: string; summary: string }>("POST", "git-keep-version", { root, message });
 
+// --- publish a skill to GitHub (its own repo; the remote is the source of truth) ---
+/** The GitHub sign-in the server found on its machine (where skill-server runs). */
+export interface GhAuthInfo {
+  /** Where it came from: "studio" (connected here) | "env" | "gh-cli" | "git-credential". */
+  source: string;
+  login: string;
+  /** Classic-token scopes; fine-grained PATs don't report any. */
+  scopes?: string;
+}
+/** The skill's remote, derived from its `origin` — having an origin IS being
+ *  linked (a teammate's clone is linked automatically). Any git host works;
+ *  github.com remotes additionally get token auth + repo-creation sugar. */
+export interface GhLink {
+  /** "github" (provider sugar applies) | "git" (GitLab, Bitbucket, self-hosted, …). */
+  provider: "github" | "git";
+  /** Short display label — "owner/repo" on GitHub, host/path elsewhere. */
+  label: string;
+  /** Browser URL, when derivable. */
+  htmlUrl?: string;
+  url: string;
+}
+/** Everything the "Publish to GitHub" panel needs, in one call. */
+export interface GhStatus {
+  auth?: GhAuthInfo;
+  /** The gh CLI is installed on the server machine (for the sign-in hint). */
+  ghCli: boolean;
+  /** The OAuth device flow is available (a client id is configured). */
+  deviceFlow: boolean;
+  /** The skill is its own git repository (publishing requires it). */
+  tracked: boolean;
+  /** At least one version has been saved. */
+  hasVersion: boolean;
+  branch?: string;
+  link?: GhLink;
+  /** Uncommitted changes exist (they sync only once saved as a version). */
+  dirty: boolean;
+  /** Versions to push / pull — present when `checkRemote` and the fetch worked. */
+  ahead?: number;
+  behind?: number;
+  /** The remote couldn't be reached (offline, auth) — shown, not fatal. */
+  remoteError?: string;
+}
+/** A place the skill's repo can live: the user's account or one of their orgs. */
+export interface GhOwner {
+  login: string;
+  kind: "user" | "org";
+  /** The org's policy lets this user create repositories there. */
+  canCreate: boolean;
+}
+export interface GhDeviceStart {
+  userCode: string;
+  verificationUri: string;
+  /** Seconds between device-poll calls. */
+  interval: number;
+  expiresIn: number;
+}
+export interface GhDevicePoll {
+  status: "pending" | "ok";
+  login?: string;
+  /** Current poll interval (grows when GitHub asks to slow down). */
+  interval: number;
+}
+export interface GhPublishResult {
+  htmlUrl: string;
+  branch: string;
+  /** Versions pushed by the initial publish. */
+  pushed: number;
+  login: string;
+}
+export interface GhSyncResult {
+  /** What the sync did. */
+  action: "upToDate" | "pushed" | "pulled" | "rebased";
+  /** Versions pulled down / pushed up. */
+  pulled: number;
+  pushed: number;
+  /** Both sides changed the same lines; the remote won those hunks (local
+   *  versions were kept, rebased on top). */
+  conflictResolved: boolean;
+}
+/** `checkRemote` also fetches and reports ahead/behind (one network round-trip). */
+export const githubStatus = (root: string, checkRemote = false) =>
+  http<GhStatus>("POST", "github/status", { root, checkRemote });
+export const githubOwners = () => http<GhOwner[]>("POST", "github/owners");
+/** Validate + store a pasted personal access token (the manual fallback). */
+export const githubConnectToken = (token: string) =>
+  http<GhAuthInfo>("POST", "github/connect-token", { token });
+/** Forget the Studio-stored token (ambient gh/env/git sign-ins are untouched). */
+export const githubDisconnect = () =>
+  http<{ ok: boolean }>("POST", "github/disconnect").then(() => {});
+export const githubDeviceStart = () => http<GhDeviceStart>("POST", "github/device-start");
+export const githubDevicePoll = () => http<GhDevicePoll>("POST", "github/device-poll");
+/** Create owner/repo on GitHub (empty, private by default), set it as the
+ *  skill repo's origin, and push the local version history. */
+export const githubPublish = (root: string, owner: string, repo: string, isPrivate: boolean) =>
+  http<GhPublishResult>("POST", "github/publish", { root, owner, repo, private: isPrivate });
+/** Connect ANY existing git remote by URL (GitLab, Bitbucket, self-hosted, …):
+ *  sets origin and runs a first sync; on failure nothing is left connected.
+ *  Uses the machine's own git credentials — no GitHub sign-in needed. */
+export const githubConnectRemote = (root: string, url: string) =>
+  http<GhSyncResult>("POST", "github/connect-remote", { root, url });
+/** Reconcile with the remote (remote-first): ff-pull / push / rebase-and-push.
+ *  After a pull/rebase the working tree changed — reload the skill. */
+export const githubSyncNow = (root: string) => http<GhSyncResult>("POST", "github/sync", { root });
+/** Quiet background fast-forward pull (remote is the source of truth); never
+ *  pushes, rebases, or errors — anything unexpected is just `pulled: 0`. */
+export const githubAutoPull = (root: string) => http<GhSyncResult>("POST", "github/auto-pull", { root });
+/** Disconnect the skill from its remote (nothing is removed on GitHub). */
+export const githubUnlink = (root: string) =>
+  http<{ ok: boolean }>("POST", "github/unlink", { root }).then(() => {});
+
 // --- secret manager (machine-local env vars for skills) ---
 export interface SecretEntry {
   key: string;
@@ -483,6 +614,10 @@ export interface SetupResult {
 }
 export const secretsStatus = () => http<SecretsStatus>("GET", "secrets-status");
 export const secretsList = () => http<SecretEntry[]>("GET", "secrets-list");
+/** Parse a pasted/uploaded `.env` body into store-ready entries (with
+ *  already-exists flags); apply the chosen ones with [`secretSet`]. */
+export const secretsPreviewEnv = (data: string) =>
+  http<ImportedSecret[]>("POST", "secrets-preview-env", { data });
 export const secretSet = (key: string, value: string) => http<void>("POST", "secret-set", { key, value });
 export const secretDelete = (key: string) => http<void>("POST", "secret-delete", { key });
 export const secretsSetup = () => http<SetupResult>("POST", "secrets-setup");
@@ -577,6 +712,49 @@ export function attachTerminal(
   const q = new URLSearchParams({ id, cols: String(opts.cols), rows: String(opts.rows) });
   const es = new EventSource(`${API_BASE}/api/terminal/attach?${q.toString()}`);
   let closed = false;
+  // Keystrokes ride individual POSTs, which carry no ordering guarantee once two
+  // are in flight at the same time (each is its own request — and over a remote,
+  // its own proxy thread), so fast typing could land out of order in the pty.
+  // Send strictly one batch at a time, coalescing whatever arrives meanwhile —
+  // ordered input, and far fewer round trips on a high-latency link.
+  let pendingInput = "";
+  let sendingInput = false;
+  const pumpInput = async () => {
+    if (sendingInput) return;
+    sendingInput = true;
+    while (pendingInput) {
+      const batch = pendingInput;
+      pendingInput = "";
+      try {
+        await http("POST", "terminal/input", { id, data: strToB64(batch) });
+      } catch {
+        // Drop the batch on a transport blip: losing keystrokes beats replaying
+        // them late, out of order with whatever the user typed next.
+      }
+    }
+    sendingInput = false;
+  };
+  // Resizes need the same one-in-flight discipline as input — the pane fires one
+  // per animation frame while a window is dragged, far faster than a remote
+  // round-trip, so parallel POSTs could otherwise reorder and leave the pty at a
+  // stale size (a wrapped TUI that never self-corrects). Last-wins: only the
+  // newest pending (cols,rows) survives, sent after the in-flight resize resolves.
+  let pendingResize: { cols: number; rows: number } | null = null;
+  let sendingResize = false;
+  const pumpResize = async () => {
+    if (sendingResize) return;
+    sendingResize = true;
+    while (pendingResize) {
+      const { cols, rows } = pendingResize;
+      pendingResize = null;
+      try {
+        await http("POST", "terminal/resize", { id, cols, rows });
+      } catch {
+        /* transient blip — the next resize event will re-assert the size */
+      }
+    }
+    sendingResize = false;
+  };
   es.onmessage = (e) => {
     if (e.data) opts.onData(b64ToBytes(e.data));
   };
@@ -590,11 +768,27 @@ export function attachTerminal(
     }
   };
   return {
-    write: (data) => void http("POST", "terminal/input", { id, data: strToB64(data) }),
-    resize: (cols, rows) => void http("POST", "terminal/resize", { id, cols, rows }),
+    write: (data) => {
+      // Once the stream is fatally closed we no longer render output; keep
+      // feeding input and it would execute invisibly in a still-live session.
+      if (closed) return;
+      pendingInput += data;
+      void pumpInput();
+    },
+    resize: (cols, rows) => {
+      if (closed) return;
+      pendingResize = { cols, rows };
+      void pumpResize();
+    },
     detach: () => {
       closed = true;
       es.close();
     },
   };
 }
+
+/** Ship a pasted clipboard image to the backend — the machine the agent actually
+ *  runs on (possibly remote) — and get back an absolute temp-file path there,
+ *  ready to paste into the prompt the way drag-and-drop pastes a path. */
+export const terminalPasteImage = (bytes: Uint8Array, mime: string) =>
+  http<{ path: string }>("POST", "terminal/paste-image", { data: bytesToB64(bytes), mime });

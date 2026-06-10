@@ -11,7 +11,7 @@ use crate::process::hidden_command;
 #[serde(rename_all = "camelCase")]
 pub struct GitInfo {
     available: bool,
-    is_repo: bool,
+    pub(crate) is_repo: bool,
     in_parent_repo: bool,
     toplevel: Option<String>,
     branch: Option<String>,
@@ -92,7 +92,7 @@ pub struct CommitDetail {
     number: usize,
 }
 
-fn git(root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
+pub(crate) fn git(root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
     hidden_command("git")
         .arg("-C")
         .arg(root)
@@ -102,7 +102,7 @@ fn git(root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
 }
 
 /// Run a git command, returning trimmed stdout only on success.
-fn git_ok(root: &Path, args: &[&str]) -> Option<String> {
+pub(crate) fn git_ok(root: &Path, args: &[&str]) -> Option<String> {
     let out = git(root, args).ok()?;
     out.status
         .success()
@@ -173,7 +173,7 @@ pub fn git_info(root: &str) -> Result<GitInfo, String> {
 #[serde(rename_all = "camelCase")]
 pub struct DirtyState {
     root: String,
-    dirty: bool,
+    pub(crate) dirty: bool,
 }
 
 /// Batch "has uncommitted changes?" for the home page — one cheap
@@ -203,6 +203,16 @@ pub fn git_init(root: &str) -> Result<GitInfo, String> {
     let out = git(&root_path, &["init"])?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    // Keep machine-local secrets out of history from the very first save —
+    // version commits run `git add -A`, and a published repo's history is
+    // shared. Written before any commit so it rides the first version.
+    let gi = root_path.join(".gitignore");
+    if !gi.exists() {
+        let _ = std::fs::write(
+            &gi,
+            "# Keep machine-local secrets out of version history (Skill Studio).\n.env\n.env.*\n",
+        );
     }
     git_info(root)
 }
@@ -281,6 +291,12 @@ pub fn git_log(root: &str, limit: usize) -> Result<Vec<Commit>, String> {
         }
     }
     Ok(commits)
+}
+
+/// The newest version's (number, subject), when the skill has any commits —
+/// used to label a GitHub sync with the local version it captures.
+pub fn latest_version(root: &str) -> Option<(usize, String)> {
+    git_log(root, 1).ok()?.into_iter().next().map(|c| (c.number, c.message))
 }
 
 /// Largest diff we ship to the UI. Skill repos are small; this only guards
@@ -611,7 +627,7 @@ const PREVIEW_STASH_MSG: &str = "skill-studio: version preview";
 const PREVIEW_BRANCH_CFG: &str = "skillstudio.previewbranch";
 
 /// The branch HEAD points at, or None when detached (i.e. mid-preview).
-fn current_branch(root: &Path) -> Option<String> {
+pub(crate) fn current_branch(root: &Path) -> Option<String> {
     git_ok(root, &["symbolic-ref", "--short", "-q", "HEAD"]).filter(|s| !s.is_empty())
 }
 

@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Outlet, useMatch, useNavigate, useSearchParams } from "react-router-dom";
 import { ReviewToggleContext } from "./reviewContext";
 import { skillKind } from "@/lib/agents";
@@ -22,8 +22,25 @@ import { studioFilePath, studioPath } from "@/lib/routes";
  * AppShell only intervenes if an autosave actually failed.
  */
 export default function StudioLayout() {
-  const { data } = useStudio();
+  const { data, reload } = useStudio();
   const navigate = useNavigate();
+
+  // GitHub-connected skills treat the remote as the source of truth: on open,
+  // quietly fast-forward to it in the background (the server no-ops fast when
+  // the skill has no remote, and never touches diverged or locally-edited
+  // state). A successful pull changed the files on disk — reload the editor.
+  useEffect(() => {
+    let stale = false;
+    api
+      .githubAutoPull(data.root)
+      .then((r) => {
+        if (!stale && r.pulled > 0) reload(true);
+      })
+      .catch(() => {}); // offline / no remote — nothing to do
+    return () => {
+      stale = true;
+    };
+  }, [data.root, reload]);
   // Which file is open: the `file/*` splat, else SKILL.md (the index route).
   // useMatch resolves against the current location, so it works here above the
   // Outlet (the splat param isn't visible to this parent via useParams). On the

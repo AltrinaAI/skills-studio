@@ -7,17 +7,21 @@
 //! frontend); reattaching spawns a fresh `tmux attach`, so full-screen TUIs
 //! (claude/codex) redraw correctly.
 //!
-//! Lifetime model:
+//! Lifetime model — terminals are PERSISTENT:
 //!   * attachment ↔ frontend — decoupled: a global registry of `Weak`
 //!     attachments; the strong `Arc` is held by the streaming owner (the SSE
 //!     reader, or the desktop's managed state). When a client disconnects the
 //!     strong ref drops → the attach PTY dies → tmux detaches → session lives.
-//!   * session ↔ backend — bound, so a dead backend leaves no zombie agents:
-//!     (a) each session embeds an owner-pid watchdog that self-reaps within
-//!     ~2s of the backend pid vanishing (covers crash / SIGKILL);
-//!     (b) `sweep_orphans()` (run at startup) kills any `ass-*` session whose
-//!     `@ass_owner_pid` is no longer a live process;
-//!     (c) `cleanup_owned()` kills this process's sessions on graceful exit.
+//!   * session ↔ backend — ALSO decoupled: sessions outlive the backend that
+//!     created them. Quit the desktop app, drop an SSH connection, upgrade or
+//!     restart the server — the agent keeps running, and any later client of
+//!     any backend can list/attach it (the `ass-*` tmux namespace is shared
+//!     machine-wide, deliberately unfiltered by creator). A session ends only
+//!     when the user kills it explicitly, or when [`sweep_stale`] garbage-
+//!     collects one whose agent has EXITED (every pane back at a plain shell)
+//!     after sitting unattached and idle for [`GC_IDLE_SECS`] — finished runs
+//!     stay reviewable for a week, but can't pile up forever. A session with a
+//!     live agent (or any non-shell foreground process) is never reaped.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -158,28 +162,6 @@ fn tmux() -> Command {
     c
 }
 
-fn pid_alive(pid: u32) -> bool {
-    std::path::Path::new(&format!("/proc/{pid}")).exists()
-}
-
-/// A process's start-time (field 22 of `/proc/<pid>/stat`, in clock ticks since
-/// boot). Together with the pid it uniquely identifies a process, so a recycled
-/// pid can't masquerade as the original owner.
-fn proc_starttime(pid: u32) -> Option<u64> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    // The comm field (2nd) is parenthesized and may contain spaces or ')', so
-    // parse from after the LAST ')': the remaining fields begin at `state`, and
-    // starttime is the 20th of those (field 22 overall).
-    let after = stat.rsplit_once(')')?.1;
-    after.split_whitespace().nth(19).and_then(|s| s.parse().ok())
-}
-
-/// True iff `pid` is the *same* owner that recorded `start` — defeats pid reuse.
-/// When `start` is unknown (older sessions), falls back to a plain liveness check.
-fn owner_alive(pid: u32, start: Option<u64>) -> bool {
-    pid_alive(pid) && start.map(|s| proc_starttime(pid) == Some(s)).unwrap_or(true)
-}
-
 /// Strip characters that would corrupt our tab-separated `list-sessions` parse.
 /// Tabs/newlines are legal in Unix paths but must never leak into metadata.
 fn sanitize_meta(s: &str) -> String {
@@ -272,49 +254,81 @@ pub fn kill_session(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn session_opt_u64(id: &str, key: &str) -> Option<u64> {
-    let out = tmux().args(["show-options", "-t", id, "-v", key]).output().ok()?;
+/// How long a finished (agent-exited), unattached session sticks around before
+/// the GC may reap it: a week, so a run that finishes Friday night is still
+/// reviewable well past the weekend. Live agents are never reaped regardless.
+const GC_IDLE_SECS: u64 = 7 * 24 * 3600;
+
+/// Garbage-collect stale terminals. Run at backend startup. This is the ONLY
+/// automatic reaping — sessions deliberately outlive their creating backend
+/// (see the module docs), so the GC's bar is high: a session is stale only if
+/// it is unattached, every pane is back at a plain shell (the agent exited),
+/// and nothing has touched it for [`GC_IDLE_SECS`].
+pub fn sweep_stale() {
+    if let Ok(sessions) = list_sessions() {
+        for s in sessions {
+            let _ = gc_session_if_stale(&s.id, GC_IDLE_SECS);
+        }
+    }
+}
+
+/// Reap `id` iff stale (see [`sweep_stale`]); returns whether it was reaped.
+/// Per-session so tests can target their own sessions with a zero cutoff
+/// without sweeping a developer's real terminals.
+fn gc_session_if_stale(id: &str, idle_secs: u64) -> bool {
+    let fmt = format!("#{{session_attached}}{SEP}#{{session_activity}}");
+    let Ok(out) = tmux().args(["display-message", "-p", "-t", id, &fmt]).output() else {
+        return false;
+    };
     if !out.status.success() {
-        return None;
+        return false; // session gone (or tmux unhappy) — nothing to do
     }
-    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut f = text.trim().split(SEP);
+    let attached = f.next().unwrap_or("1");
+    let activity: u64 = f.next().and_then(|s| s.parse().ok()).unwrap_or(u64::MAX);
+    if attached != "0" {
+        return false; // someone is looking at it
+    }
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    if now.saturating_sub(activity) < idle_secs {
+        return false; // touched too recently
+    }
+    if !all_panes_are_shells(id) {
+        return false; // the agent (or some process) is still running
+    }
+    log::info!("reaping stale terminal {id} (agent exited, idle)");
+    let _ = kill_session(id);
+    true
 }
 
-fn owner_pid_of(id: &str) -> Option<u32> {
-    session_opt_u64(id, "@ass_owner_pid").map(|v| v as u32)
-}
-
-/// Kill any of *our* sessions whose owning backend process is gone. Run once at
-/// backend startup — the belt to the watchdog's suspenders. Uses pid + start-time
-/// so a recycled pid doesn't keep an orphan alive.
-pub fn sweep_orphans() {
-    if let Ok(sessions) = list_sessions() {
-        for s in sessions {
-            let alive = owner_pid_of(&s.id)
-                .map(|pid| owner_alive(pid, session_opt_u64(&s.id, "@ass_owner_start")))
-                .unwrap_or(false);
-            if !alive {
-                log::info!("reaping orphaned terminal {} (owning process gone)", s.id);
-                let _ = kill_session(&s.id);
-            }
+/// True when every pane's foreground command is a plain shell — i.e. the agent
+/// (and anything the user ran) has exited and only prompts remain.
+fn all_panes_are_shells(id: &str) -> bool {
+    const SHELLS: [&str; 8] = ["bash", "sh", "zsh", "fish", "dash", "ash", "ksh", "tcsh"];
+    let Ok(out) = tmux()
+        .args(["list-panes", "-s", "-t", id, "-F", "#{pane_current_command}"])
+        .output()
+    else {
+        return false;
+    };
+    if !out.status.success() {
+        return false;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut any = false;
+    for cmd in text.lines() {
+        any = true;
+        if !SHELLS.contains(&cmd.trim()) {
+            return false;
         }
     }
-}
-
-/// Kill the sessions owned by *this* process — call on graceful shutdown.
-pub fn cleanup_owned() {
-    let me = std::process::id();
-    if let Ok(sessions) = list_sessions() {
-        for s in sessions {
-            if owner_pid_of(&s.id) == Some(me) {
-                let _ = kill_session(&s.id);
-            }
-        }
-    }
+    any
 }
 
 /// Create a detached tmux session running the chosen agent in `cwd`, tagged so
-/// it can be listed/reaped, with an embedded owner-pid watchdog.
+/// it can be listed from any backend. The session is persistent: nothing about
+/// it dies with this process (see the module docs for the lifetime model).
 #[allow(clippy::too_many_arguments)]
 pub fn create_session(
     agent_id: &str,
@@ -346,9 +360,11 @@ pub fn create_session(
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    let name = format!("{PREFIX}{secs}-{seq}");
     let owner = std::process::id();
-    let owner_start = proc_starttime(owner);
+    // The pid is part of the name because the seq counter is per-process: two
+    // backends creating a terminal in the same second would otherwise both
+    // mint `ass-<secs>-0` and the second create would fail.
+    let name = format!("{PREFIX}{owner}-{secs}-{seq}");
 
     // Build the agent argv (empty for a plain shell).
     let mut argv: Vec<String> = Vec::new();
@@ -379,43 +395,34 @@ pub fn create_session(
         .collect::<Vec<_>>()
         .join(" ");
 
-    // The owner watchdog: self-reap within ~2s of the backend dying. We check
-    // both the pid AND (when known) its start-time, so a recycled pid can't fool
-    // the loop into thinking the original backend is still alive.
-    let alive_check = match owner_start {
-        Some(start) => format!(
-            "kill -0 {owner} 2>/dev/null && [ \"$(awk '{{n=split($0,a,\")\"); split(a[n],b,\" \"); print b[20]}}' /proc/{owner}/stat 2>/dev/null)\" = \"{start}\" ]",
-            owner = owner,
-            start = start,
-        ),
-        None => format!("kill -0 {owner} 2>/dev/null", owner = owner),
-    };
-    let watchdog = format!(
-        "( while {alive_check}; do sleep 2; done; {tmux} kill-session -t {name} ) >/dev/null 2>&1 &",
-        alive_check = alive_check,
-        tmux = shell_quote(&tmux_bin()),
-        name = shell_quote(&name),
-    );
-    // `; exec bash -l` keeps the session alive after the agent exits.
+    // `; exec bash -l` keeps the pane (and the agent's scrollback) alive after
+    // the agent exits, so a finished run stays reviewable from any client —
+    // the GC only collects it once it's been idle for a week (see sweep_stale).
     let line = if agent_cmd.is_empty() {
-        format!("{watchdog} exec bash -l")
+        "exec bash -l".to_string()
     } else {
-        format!("{watchdog} {agent_cmd}; exec bash -l")
+        format!("{agent_cmd}; exec bash -l")
     };
 
     let cols_s = cols.max(2).to_string();
     let rows_s = rows.max(2).to_string();
-    let status = tmux()
+    // Create the session around a short-lived stub window first: `history-limit`
+    // is captured per-window at creation time, so the session options must be in
+    // place *before* the real agent window exists. `-P -F` prints the stub's
+    // global window id (`@N`) so exactly that window can be dropped afterwards
+    // (immune to `base-index` / `renumber-windows` in the user's tmux config).
+    let out = tmux()
         .args([
-            "new-session", "-d", "-s", &name, "-c", &cwd_resolved, "-x", &cols_s, "-y", &rows_s,
-            "bash", "-lc", &line,
+            "new-session", "-d", "-s", &name, "-x", &cols_s, "-y", &rows_s,
+            "-P", "-F", "#{window_id}", "sleep", "60",
         ])
-        .status()
+        .output()
         .map_err(|e| format!("Couldn't start tmux: {e}"))?;
-    if !status.success() {
-        log::error!("tmux new-session failed (agent={}, cwd={cwd_resolved})", opt.agent);
-        return Err("tmux couldn't create the session (is the working directory valid?).".into());
+    if !out.status.success() {
+        log::error!("tmux new-session failed (agent={})", opt.agent);
+        return Err("tmux couldn't create the session.".into());
     }
+    let stub = String::from_utf8_lossy(&out.stdout).trim().to_string();
 
     let label = format!("{} · {}", opt.label, basename(&cwd_resolved));
     // Sanitize every stored value: tabs/newlines (legal in paths) would corrupt
@@ -427,11 +434,26 @@ pub fn create_session(
     set("@ass_agent", &opt.agent);
     set("@ass_cwd", &cwd_resolved);
     set("@ass_created", &secs.to_string());
+    // Informational only (provenance for debugging) — sessions deliberately
+    // outlive their creator, so nothing keys lifecycle off this anymore.
     set("@ass_owner_pid", &owner.to_string());
-    if let Some(start) = owner_start {
-        set("@ass_owner_start", &start.to_string());
-    }
     set("status", "off"); // clean embed — no tmux status bar
+    // Scrolling happens in *tmux's* history (the UI's terminal only ever sees the
+    // alternate screen): `mouse on` turns wheel events into copy-mode scrolling.
+    // Session-scoped, so the user's own tmux sessions keep their settings.
+    set("mouse", "on");
+    set("history-limit", "10000");
+
+    let status = tmux()
+        .args(["new-window", "-t", &name, "-c", &cwd_resolved, "bash", "-lc", &line])
+        .status()
+        .map_err(|e| format!("Couldn't start tmux: {e}"))?;
+    if !status.success() {
+        let _ = kill_session(&name);
+        log::error!("tmux new-window failed (agent={}, cwd={cwd_resolved})", opt.agent);
+        return Err("tmux couldn't create the session (is the working directory valid?).".into());
+    }
+    let _ = tmux().args(["kill-window", "-t", &stub]).output();
 
     Ok(SessionInfo {
         id: name,
@@ -609,6 +631,76 @@ pub fn resize(id: &str, cols: u16, rows: u16) -> Result<(), String> {
         Some(a) => a.resize_to(cols, rows),
         None => Err("Terminal is not attached.".into()),
     }
+}
+
+// ───────────────────────────── pasted images ─────────────────────────────
+
+static PASTE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Where pasted clipboard images land: a per-user dir on the machine the agents
+/// run on, so the returned path is readable from inside any session. The user's
+/// cache dir, NOT the shared /tmp — a predictable name in a world-writable dir
+/// invites symlink games on multi-user hosts (and [`sweep_old_pastes`] deletes
+/// in here, which must never be redirectable by another user).
+fn paste_dir() -> PathBuf {
+    dirs::cache_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("skill-studio")
+        .join("pastes")
+}
+
+/// Best-effort: drop pasted images older than a day so the dir can't grow
+/// without bound under a long-lived backend.
+fn sweep_old_pastes(dir: &std::path::Path) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let cutoff = SystemTime::now() - std::time::Duration::from_secs(24 * 3600);
+    for e in rd.flatten() {
+        let stale = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .map(|t| t < cutoff)
+            .unwrap_or(false);
+        if stale {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+/// Save a pasted clipboard image (base64) to a temp file and return its absolute
+/// path. This is how images cross the client/server boundary: the agent may run
+/// on a different machine than the user's clipboard (remote SSH), so "paste"
+/// must materialize the bytes server-side and hand back a path — the same shape
+/// drag-and-drop produces in a native terminal.
+pub fn save_pasted_image(data_b64: &str, mime: &str) -> Result<String, String> {
+    let ext = match mime {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/bmp" => "bmp",
+        _ => return Err(format!("Unsupported image type: {mime}")),
+    };
+    let bytes = b64_decode(data_b64);
+    if bytes.is_empty() {
+        return Err("The pasted image was empty.".into());
+    }
+    const MAX_BYTES: usize = 32 * 1024 * 1024;
+    if bytes.len() > MAX_BYTES {
+        return Err("The pasted image is too large (max 32 MB).".into());
+    }
+    let dir = paste_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Couldn't create the paste dir: {e}"))?;
+    sweep_old_pastes(&dir);
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let seq = PASTE_SEQ.fetch_add(1, Ordering::Relaxed);
+    // pid in the name: temp dirs are shared, and two backends could both be at
+    // seq 0 in the same second.
+    let path = dir.join(format!("image-{}-{secs}-{seq}.{ext}", std::process::id()));
+    std::fs::write(&path, &bytes).map_err(|e| format!("Couldn't save the image: {e}"))?;
+    Ok(path.to_string_lossy().into_owned())
 }
 
 // ───────────────────────────── agent detection ─────────────────────────────
@@ -854,13 +946,19 @@ mod tests {
     }
 
     #[test]
-    fn starttime_and_owner_alive() {
-        let me = std::process::id();
-        let start = proc_starttime(me).expect("our own start-time is readable");
-        assert!(owner_alive(me, Some(start)), "we are alive with our real start-time");
-        assert!(!owner_alive(me, Some(start.wrapping_add(1))), "wrong start-time ⇒ not the same owner");
-        assert!(owner_alive(me, None), "unknown start-time falls back to liveness");
-        assert!(!owner_alive(2147480000, None), "a dead pid is never alive");
+    fn save_pasted_image_roundtrip() {
+        let bytes = b"\x89PNG\r\n\x1a\nfakepng";
+        let path = save_pasted_image(&b64_encode(bytes), "image/png").expect("save");
+        assert!(path.ends_with(".png"));
+        assert_eq!(std::fs::read(&path).expect("file exists"), bytes);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn save_pasted_image_rejects_bad_input() {
+        assert!(save_pasted_image("aGVsbG8=", "text/plain").is_err(), "mime allowlist");
+        assert!(save_pasted_image("", "image/png").is_err(), "empty payload");
+        assert!(save_pasted_image("!!!not-base64!!!", "image/png").is_err(), "undecodable payload");
     }
 
     // tmux-gated: attach → write keystrokes → read echoed output.
@@ -891,46 +989,94 @@ mod tests {
         assert!(seen.contains("HELLO_RT"), "should see echoed output; got {} bytes", seen.len());
     }
 
-    // tmux-gated end-to-end of the session lifetime + orphan sweep.
+    // tmux-gated end-to-end of session creation + the persistence/GC policy.
     #[test]
-    fn tmux_session_lifecycle_and_sweep() {
+    fn tmux_session_lifecycle_and_stale_gc() {
         if which("tmux").is_none() {
             eprintln!("tmux not installed — skipping");
             return;
         }
         let cwd = std::env::temp_dir().to_string_lossy().into_owned();
         let s = create_session("shell", &cwd, 80, 24, false, false, false, &[]).expect("create");
-        assert!(s.id.starts_with(PREFIX));
+        assert!(
+            s.id.starts_with(&format!("{PREFIX}{}-", std::process::id())),
+            "names are pid-namespaced so two backends can't collide: {}",
+            s.id
+        );
         assert!(session_exists(&s.id), "session should exist after create");
         let listed = list_sessions().unwrap();
         let found = listed.iter().find(|x| x.id == s.id).expect("list_sessions should include it");
         assert_eq!(found.agent, "shell");
         assert!(found.label.contains('·'), "label carries the agent + cwd basename");
 
-        // Re-tag with a dead owner pid → the orphan sweep must reap it.
-        let _ = tmux()
-            .args(["set-option", "-t", &s.id, "@ass_owner_pid", "2147480000"])
-            .output();
-        sweep_orphans();
-        assert!(!session_exists(&s.id), "sweep_orphans should kill a dead-owner session");
+        // The stub-window dance must leave exactly one window, with mouse
+        // scrolling on and the deeper (window-creation-time) history limit.
+        let opt = |k: &str| {
+            let out = tmux().args(["show-options", "-t", &s.id, "-v", k]).output().unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        assert_eq!(opt("mouse"), "on", "wheel scrolling needs tmux mouse mode");
+        assert_eq!(opt("history-limit"), "10000");
+        let panes = tmux()
+            .args(["list-windows", "-t", &s.id, "-F", "#{history_limit}"])
+            .output()
+            .unwrap();
+        let lines: Vec<String> = String::from_utf8_lossy(&panes.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(lines, vec!["10000"], "one window, created after history-limit was set");
+
+        // The week-long idle cutoff spares a fresh session (the startup sweep
+        // never touches recent work)…
+        sweep_stale();
+        assert!(session_exists(&s.id), "a fresh session survives the real sweep");
+        // …and with a zero cutoff a detached, shell-only session is collected.
+        // (Targeted per-id so this test can't reap a developer's real terminals.)
+        assert!(gc_session_if_stale(&s.id, 0), "detached + agent-exited + past cutoff ⇒ reaped");
+        assert!(!session_exists(&s.id));
     }
 
-    // tmux-gated: a recycled pid (same pid, different start-time) is reaped.
+    // tmux-gated: the GC must never take a session with a live process or a
+    // watching client — only explicit kills end those.
     #[test]
-    fn tmux_sweep_detects_pid_reuse() {
+    fn tmux_gc_spares_live_and_attached_sessions() {
         if which("tmux").is_none() {
             eprintln!("tmux not installed — skipping");
             return;
         }
         let cwd = std::env::temp_dir().to_string_lossy().into_owned();
-        let s = create_session("shell", &cwd, 80, 24, false, false, false, &[]).expect("create");
-        assert!(session_exists(&s.id));
-        // Owner pid stays our (live) pid, but corrupt the recorded start-time to
-        // mimic a pid that was reused by a different process → sweep must reap.
-        let _ = tmux()
-            .args(["set-option", "-t", &s.id, "@ass_owner_start", "1"])
-            .output();
-        sweep_orphans();
-        assert!(!session_exists(&s.id), "start-time mismatch (pid reuse) should be reaped");
+
+        // A non-shell foreground process (stand-in for a running agent).
+        let live = create_session("shell", &cwd, 80, 24, false, false, false, &[]).expect("create");
+        let _ = tmux().args(["send-keys", "-t", &live.id, "exec sleep 300", "Enter"]).output();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while std::time::Instant::now() < deadline && all_panes_are_shells(&live.id) {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(!all_panes_are_shells(&live.id), "sleep should be the foreground command");
+        assert!(!gc_session_if_stale(&live.id, 0), "a live agent process is never GC'd");
+        assert!(session_exists(&live.id));
+        let _ = kill_session(&live.id);
+
+        // An attached client protects even a plain idle shell.
+        let watched = create_session("shell", &cwd, 80, 24, false, false, false, &[]).expect("create");
+        let (att, _rx) = attach(&watched.id, 80, 24).expect("attach");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let attached = |id: &str| {
+            let out = tmux()
+                .args(["display-message", "-p", "-t", id, "#{session_attached}"])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim() != "0"
+        };
+        while std::time::Instant::now() < deadline && !attached(&watched.id) {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(attached(&watched.id), "the tmux client should register as attached");
+        assert!(!gc_session_if_stale(&watched.id, 0), "an attached session is never GC'd");
+        assert!(session_exists(&watched.id));
+        drop(att);
+        let _ = kill_session(&watched.id);
     }
 }

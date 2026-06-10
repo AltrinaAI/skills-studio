@@ -68,7 +68,7 @@ pub fn run() {
 
             // ── lifecycle this process owns (the in-process server is spawned with
             //    startup_maintenance:false, so these run exactly once) ──
-            skill_term::sweep_orphans(); // reap terminals orphaned by a hard-killed predecessor
+            skill_term::sweep_stale(); // GC terminals whose agent finished long ago (live ones persist)
             // Point the on-device generator at the bundled/vendored llama-server so
             // it works with no config; an explicit env override still wins. The
             // in-process server shares this process, so it sees the env var.
@@ -133,14 +133,15 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(move |_app, event| {
-            // Closing the desktop app reaps the agents + engine it owns (no zombies)
-            // and tears down any live SSH session (no orphaned remote server/tunnel).
+            // Closing the desktop app tears down what only THIS process can use —
+            // the inference engine child and any live SSH session — but leaves the
+            // tmux terminals running: agents keep working after quit and are picked
+            // up by the next launch (or any other client). See skill-term's docs.
             if let tauri::RunEvent::Exit = event {
                 if let Some(r) = remote_slot.get() {
                     r.shutdown();
                 }
-                skill_term::cleanup_owned();
-                engine::shutdown(); // reap the inference engine child too
+                engine::shutdown(); // reap the inference engine child
             }
         });
 }

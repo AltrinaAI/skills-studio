@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::thread;
 
 use serde_json::{json, Value};
-use skill_core::{commitmsg, discover, engine, gitops, secrets, skill, sync};
+use skill_core::{commitmsg, discover, engine, github, gitops, secrets, skill, sync};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 mod proxy;
@@ -178,9 +178,12 @@ pub struct ServerConfig {
     pub token: Option<String>,
     /// Worker-thread count.
     pub workers: usize,
-    /// Run `sweep_orphans` / `reap_orphans` / `prefetch_model` on start. The
-    /// standalone binary owns this; an embedding process (the desktop) that does
-    /// its own lifecycle sets it `false` so the chores don't run twice.
+    /// Run the startup chores: `skill_term::sweep_stale` (GC long-finished
+    /// terminals — never live ones; sessions deliberately outlive backends),
+    /// `engine::reap_orphans` (kill an inference engine whose backend died),
+    /// and `prefetch_model`. The standalone binary owns this; an embedding
+    /// process (the desktop) that does its own lifecycle sets it `false` so
+    /// the chores don't run twice.
     pub startup_maintenance: bool,
     /// The SSH connection manager (desktop only). `None` = a plain server with no
     /// remoting (the standalone binary, or browser-local dev). When set, the server
@@ -242,9 +245,11 @@ pub fn spawn(cfg: ServerConfig) -> std::io::Result<ServerHandle> {
     let server = Arc::new(server);
 
     if cfg.startup_maintenance {
-        // Reap terminals / inference engines orphaned by a previous backend that
-        // died hard, then warm the model so the first commit draft is fast.
-        skill_term::sweep_orphans();
+        // GC terminals whose agent finished long ago (live ones persist across
+        // backend restarts by design — see skill-term), reap an inference
+        // engine orphaned by a dead backend, then warm the model so the first
+        // commit draft is fast.
+        skill_term::sweep_stale();
         engine::reap_orphans();
         engine::prefetch_model();
     }
@@ -585,6 +590,12 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             let overwrite = v.get("overwrite").and_then(|x| x.as_bool()).unwrap_or(false);
             json_reply(sync::import_skill_zip_base64(&s("data"), &s("target"), overwrite))
         }
+        (Method::Post, "/api/import-remote") => {
+            // Clone a skill repository (GitHub/GitLab/any git URL) into a home;
+            // the clone keeps its origin, so the skill arrives sync-connected.
+            let overwrite = v.get("overwrite").and_then(|x| x.as_bool()).unwrap_or(false);
+            json_reply(github::import_skill_from_remote(&s("url"), &s("target"), overwrite))
+        }
         // --- app-managed agent terminals (tmux-backed) ---
         (Method::Get, "/api/terminal/agents") => json_reply(Ok(skill_term::detect_agents())),
         (Method::Get, "/api/terminal/list") => json_reply(skill_term::list_sessions()),
@@ -619,6 +630,12 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             json_reply(
                 skill_term::resize(&s("id"), u16f("cols", 80), u16f("rows", 24)).map(|_| json!({ "ok": true })),
             )
+        }
+        (Method::Post, "/api/terminal/paste-image") => {
+            // `data` is the image base64-encoded (the JSON body must stay UTF-8
+            // text — same convention as /api/import-zip). Returns the temp-file
+            // path on THIS machine, which is where the agent runs.
+            json_reply(skill_term::save_pasted_image(&s("data"), &s("mime")).map(|p| json!({ "path": p })))
         }
         (Method::Post, "/api/detect-required-env") => {
             let root = s("root");
@@ -657,6 +674,32 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
         (Method::Post, "/api/git-enter-version") => json_reply(gitops::git_enter_version(&s("root"), &s("sha"))),
         (Method::Post, "/api/git-exit-version") => json_reply(gitops::git_exit_version(&s("root"))),
         (Method::Post, "/api/git-keep-version") => json_reply(gitops::git_keep_version(&s("root"), &s("message"))),
+        // --- publish a skill to GitHub (its own repo; remote = source of truth) ---
+        (Method::Post, "/api/github/status") => {
+            let check_remote = v.get("checkRemote").and_then(|x| x.as_bool()).unwrap_or(false);
+            json_reply(github::github_status(&s("root"), check_remote))
+        }
+        (Method::Post, "/api/github/owners") => json_reply(github::list_owners()),
+        (Method::Post, "/api/github/connect-token") => json_reply(github::connect_token(&s("token"))),
+        (Method::Post, "/api/github/disconnect") => {
+            json_reply(github::disconnect().map(|_| json!({ "ok": true })))
+        }
+        (Method::Post, "/api/github/device-start") => json_reply(github::device_start()),
+        (Method::Post, "/api/github/device-poll") => json_reply(github::device_poll()),
+        (Method::Post, "/api/github/publish") => {
+            let private = v.get("private").and_then(|x| x.as_bool()).unwrap_or(true);
+            json_reply(github::publish(&s("root"), &s("owner"), &s("repo"), private))
+        }
+        // Provider-free: connect any existing git remote by URL (GitLab,
+        // Bitbucket, self-hosted, …) — only github.com URLs get token sugar.
+        (Method::Post, "/api/github/connect-remote") => {
+            json_reply(github::connect_remote(&s("root"), &s("url")))
+        }
+        (Method::Post, "/api/github/sync") => json_reply(github::sync_now(&s("root"))),
+        (Method::Post, "/api/github/auto-pull") => json_reply(github::auto_pull(&s("root"))),
+        (Method::Post, "/api/github/unlink") => {
+            json_reply(github::unlink(&s("root")).map(|_| json!({ "ok": true })))
+        }
         (Method::Get, "/api/secrets-status") => json_reply(secrets::secrets_status()),
         (Method::Get, "/api/secrets-list") => json_reply(secrets::secrets_list()),
         (Method::Post, "/api/secret-set") => {
@@ -665,9 +708,38 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
         (Method::Post, "/api/secret-delete") => {
             json_reply(secrets::secret_delete(&s("key")).map(|_| json!({ "ok": true })))
         }
+        (Method::Post, "/api/secrets-preview-env") => json_reply(Ok(secrets::preview_dotenv(&s("data")))),
         (Method::Post, "/api/secrets-setup") => {
             let bootstrap = ctx.bootstrap_skill.clone().or_else(|| bootstrap_skill_dir(&ctx.dist));
             json_reply(secrets::secrets_setup(bootstrap.as_deref()))
+        }
+        // The skill's secrets as a plain-text .env download — for handing a
+        // collaborator the values over a channel of the user's choosing (the
+        // values deliberately never travel in the repo; see remotesync).
+        (Method::Get, "/api/download-env") => {
+            let root = query_param(url, "root").unwrap_or_default();
+            let vars: Vec<String> = query_param(url, "vars")
+                .map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect())
+                .unwrap_or_default();
+            let name = Path::new(&root)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "skill".into());
+            match secrets::render_dotenv(&vars) {
+                Ok(body) if body.is_empty() => {
+                    json_reply::<()>(Err("None of this skill's secrets are in your store yet.".into()))
+                }
+                Ok(body) => Reply {
+                    status: 200,
+                    body: body.into_bytes(),
+                    content_type: "text/plain; charset=utf-8".into(),
+                    extra: vec![(
+                        "Content-Disposition".into(),
+                        format!("attachment; filename=\"{name}.env\""),
+                    )],
+                },
+                Err(e) => json_reply::<()>(Err(e)),
+            }
         }
         (Method::Get, "/api/download") => {
             let root = query_param(url, "root").unwrap_or_default();

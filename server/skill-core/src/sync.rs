@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::pathsafe::resolve_root;
 
-const IGNORED_DIRS: [&str; 5] = [".git", "node_modules", ".next", "__pycache__", ".venv"];
+pub(crate) const IGNORED_DIRS: [&str; 5] = [".git", "node_modules", ".next", "__pycache__", ".venv"];
 
 /// Bumped per zip import to give each one a unique staging dir (no time/rand dep).
 static IMPORT_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -107,32 +107,22 @@ pub struct SkillHome {
     reaches: Vec<String>,
 }
 
-/// A `.env` pair pulled out of an imported skill (kept OUT of the copied folder),
-/// offered to the secret store instead of written to disk.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ImportedSecret {
-    key: String,
-    value: String,
-    /// A secret with this key already exists in the store (loading overwrites it).
-    exists: bool,
-}
 
 /// Outcome of importing a skill (from a folder or a `.zip`) into a chosen home.
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportResult {
     /// Canonical root path of the imported skill — open it next.
-    root: String,
+    pub(crate) root: String,
     /// The skill/folder name it was imported as.
-    name: String,
+    pub(crate) name: String,
     /// The home directory it landed in.
-    dir: String,
+    pub(crate) dir: String,
     /// An existing skill of the same name was replaced.
-    overwrote: bool,
+    pub(crate) overwrote: bool,
     /// `.env` pairs found in the source (not copied into the skill) so the caller
     /// can offer to load them into the secret store. Empty when there was no `.env`.
-    env: Vec<ImportedSecret>,
+    pub(crate) env: Vec<crate::secrets::DotenvEntry>,
 }
 
 /// The personal/global skills directory each agent reads. Kept for the secret
@@ -407,19 +397,88 @@ fn import_from_dir(home: &Path, src: &Path, target: &str, overwrite: bool) -> Re
 
 /// Parse a skill's root `.env` (if any) into pairs, flagging keys already present
 /// in the secret store. Never reads nested `.env` files (export only writes one at root).
-fn read_env_pairs(skill_root: &Path) -> Vec<ImportedSecret> {
+fn read_env_pairs(skill_root: &Path) -> Vec<crate::secrets::DotenvEntry> {
     let Ok(body) = std::fs::read_to_string(skill_root.join(".env")) else {
         return Vec::new();
     };
-    let existing: std::collections::HashSet<String> =
-        crate::secrets::secret_keys().unwrap_or_default().into_iter().collect();
-    crate::secrets::parse_dotenv(&body)
-        .into_iter()
-        .map(|(key, value)| {
-            let exists = existing.contains(&key);
-            ImportedSecret { key, value, exists }
-        })
-        .collect()
+    crate::secrets::preview_dotenv(&body)
+}
+
+/// Land a freshly-cloned skill repository (staged in a temp dir) into a chosen
+/// home, PRESERVING its `.git` — the clone keeps its `origin`, so the imported
+/// skill arrives already connected for remote sync. Unlike the folder/zip path
+/// this MOVES rather than copies (a filtering copy would drop the repository),
+/// and tracked files are left exactly as cloned — deleting a *tracked* `.env`
+/// would just dirty the worktree against the remote, so foreign `.env` pairs
+/// are reported for the secret store but the file stays.
+pub(crate) fn land_cloned_skill(
+    home: &Path,
+    staged: &Path,
+    fallback_name: Option<&str>,
+    target: &str,
+    overwrite: bool,
+) -> Result<ImportResult, String> {
+    let raw = std::fs::read_to_string(staged.join("SKILL.md"))
+        .map_err(|e| format!("Failed to read SKILL.md: {e}"))?;
+    // The staging dir's own name is synthetic, so fall back to the caller's
+    // hint (derived from the remote URL) instead of the folder name.
+    let name = frontmatter_name(&raw)
+        .filter(|n| valid_skill_name(n))
+        .or_else(|| fallback_name.map(str::to_string).filter(|n| valid_skill_name(n)))
+        .ok_or_else(|| {
+            "Couldn't determine a valid skill name — the SKILL.md `name` and repository name are both invalid."
+                .to_string()
+        })?;
+
+    let d = dest_by_id(target).ok_or_else(|| format!("Unknown skill location: {target}"))?;
+    let dir = home.join(d.cohort[0]);
+    let dest = dir.join(&name);
+
+    let env = read_env_pairs(staged);
+
+    let mut overwrote = false;
+    if dest.symlink_metadata().is_ok() {
+        if !overwrite {
+            return Err(format!("A skill named \"{name}\" already exists here."));
+        }
+        remove_path(&dest)?;
+        overwrote = true;
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    // Rename keeps .git for free; the fallback (staging on another device, e.g.
+    // a tmpfs /tmp) is an unfiltered recursive copy for the same reason.
+    if std::fs::rename(staged, &dest).is_err() {
+        if let Err(e) = copy_dir_all(staged, &dest) {
+            let _ = std::fs::remove_dir_all(&dest);
+            return Err(e);
+        }
+    }
+
+    let canon = std::fs::canonicalize(&dest).unwrap_or(dest);
+    Ok(ImportResult {
+        root: canon.to_string_lossy().into_owned(),
+        name,
+        dir: dir.to_string_lossy().into_owned(),
+        overwrote,
+        env,
+    })
+}
+
+/// Unfiltered recursive copy (INCLUDING `.git` and dot-files) — only for the
+/// cross-device fallback of [`land_cloned_skill`]; everything else uses the
+/// filtering [`copy_tree`].
+fn copy_dir_all(src: &Path, dest: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    for entry in std::fs::read_dir(src).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let to = dest.join(entry.file_name());
+        if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+            copy_dir_all(&entry.path(), &to)?;
+        } else {
+            std::fs::copy(entry.path(), &to).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]

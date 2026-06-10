@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { PreviewBadge, Spinner } from "@/components/ui";
+import { Spinner } from "@/components/ui";
 import { agentColor, KIND_TAG, type SkillKind } from "@/lib/agents";
 import { useConfirm } from "@/components/useConfirm";
 import * as api from "@/lib/api";
 import type { SyncTarget } from "@/lib/api";
 import { secretsPath } from "@/lib/routes";
+import { GitHubSection } from "./GitHubSync";
 
 const btnGhost =
   "rounded-md border border-border px-3 py-1.5 text-sm text-fg transition-colors hover:bg-panel disabled:opacity-40";
@@ -193,44 +194,13 @@ function DeleteSection({
   );
 }
 
-// ---- Collaborate (wireframe / preview) -------------------------------------
-function CollaborateSection() {
-  return (
-    <div className="space-y-2.5 opacity-90">
-      <p className="text-xs text-muted">
-        Link this skill’s repository to a shared remote and collaborate with your team — push, pull, and merge changes.
-      </p>
-      <div className="flex gap-2">
-        <input
-          disabled
-          placeholder="git@github.com:org/skills.git"
-          className="w-full cursor-not-allowed rounded-md border border-border bg-panel px-2 py-1.5 font-mono text-xs text-faint"
-        />
-        <button type="button" disabled className="shrink-0 cursor-not-allowed rounded-md border border-border px-3 py-1.5 text-sm text-faint">
-          Connect
-        </button>
-      </div>
-      <div className="flex gap-2">
-        <button type="button" disabled className="cursor-not-allowed rounded-md border border-border px-3 py-1.5 text-sm text-faint">
-          ↑ Push
-        </button>
-        <button type="button" disabled className="cursor-not-allowed rounded-md border border-border px-3 py-1.5 text-sm text-faint">
-          ↓ Pull
-        </button>
-        <button type="button" disabled className="cursor-not-allowed rounded-md border border-border px-3 py-1.5 text-sm text-faint">
-          Merge
-        </button>
-      </div>
-      <p className="text-[0.7rem] text-faint">Coming soon — not yet functional.</p>
-    </div>
-  );
-}
-
 // ---- Secrets (this skill's referenced env vars) -----------------------------
 // `declared` is the skill's reconciled metadata.required-env (detected on save).
 // We cross-check it against the store so the panel shows, at a glance, which of
 // this skill's secrets are set and which are still missing — then jump to manage.
-function SecretsSection({ declared, onOpen }: { declared: string[]; onOpen: () => void }) {
+// Values never travel with the repo, so "Export .env" is the explicit hand-off
+// for collaborators: a plain-text file the user shares over a channel they trust.
+function SecretsSection({ root, declared, onOpen }: { root: string; declared: string[]; onOpen: () => void }) {
   const [stored, setStored] = useState<Set<string> | null>(null);
   useEffect(() => {
     api
@@ -240,6 +210,7 @@ function SecretsSection({ declared, onOpen }: { declared: string[]; onOpen: () =
   }, []);
 
   const missing = stored ? declared.filter((k) => !stored.has(k)) : [];
+  const exportable = stored ? declared.filter((k) => stored.has(k)) : [];
 
   return (
     <div className="space-y-2.5">
@@ -274,9 +245,27 @@ function SecretsSection({ declared, onOpen }: { declared: string[]; onOpen: () =
           </ul>
         </>
       )}
-      <button type="button" onClick={onOpen} className={btnGhost}>
-        Open Secrets →
-      </button>
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" onClick={onOpen} className={btnGhost}>
+          Open Secrets →
+        </button>
+        {exportable.length > 0 && (
+          <button
+            type="button"
+            onClick={() => api.downloadEnv(root, exportable)}
+            className={btnGhost}
+            title="Download this skill's secrets as a .env file"
+          >
+            Export .env
+          </button>
+        )}
+      </div>
+      {exportable.length > 0 && (
+        <p className="text-[0.7rem] text-faint">
+          The .env is plain text — share it over a channel you trust, and never commit it. A teammate imports
+          it on the Secrets page.
+        </p>
+      )}
     </div>
   );
 }
@@ -322,6 +311,7 @@ export default function ManagePanel({
         <div className="min-h-0 flex-1 overflow-auto">
           <Section title="Secrets">
             <SecretsSection
+              root={root}
               declared={declared}
               onOpen={() => {
                 onClose();
@@ -332,8 +322,8 @@ export default function ManagePanel({
           <Section title="Sync to another agent">
             <SyncSection root={root} />
           </Section>
-          <Section title="Collaborate" badge={<PreviewBadge />}>
-            <CollaborateSection />
+          <Section title="Publish to GitHub">
+            <GitHubSection root={root} dirName={dirName} />
           </Section>
           <Section title="Delete">
             <DeleteSection root={root} dirName={dirName} kind={kind} onDeleted={onDeleted} />

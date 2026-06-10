@@ -49,6 +49,7 @@ export default function ImportSkillDialog({
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [gitUrl, setGitUrl] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -89,6 +90,12 @@ export default function ImportSkillDialog({
   const chooseZip = () => fileInputRef.current?.click();
   const importZipFile = (file: File) =>
     void attempt(async (ow) => api.importSkillZipUpload(await fileToBase64(file), target, ow));
+  // Clone a skill repository (GitHub/GitLab/any git URL). The clone keeps its
+  // origin, so the imported skill arrives already connected for sync.
+  const importFromUrl = () => {
+    const url = gitUrl.trim();
+    if (url) void attempt((ow) => api.importSkillFromRemote(url, target, ow));
+  };
 
   // File drop onto the dropzone (expects a `.zip`); the buttons cover folder/zip too.
   const onDrop = (e: React.DragEvent) => {
@@ -186,6 +193,23 @@ export default function ImportSkillDialog({
               <button type="button" onClick={chooseFolder} className={`${btnGhost} w-full`}>
                 Choose a folder…
               </button>
+              <div className="flex gap-2">
+                <input
+                  value={gitUrl}
+                  onChange={(e) => setGitUrl(e.target.value)}
+                  placeholder="https://github.com/user/skill.git"
+                  spellCheck={false}
+                  className="min-w-0 flex-1 rounded-md border border-border bg-surface px-2.5 py-1.5 font-mono text-xs text-fg outline-none focus:border-accent"
+                  onKeyDown={(e) => e.key === "Enter" && importFromUrl()}
+                />
+                <button type="button" onClick={importFromUrl} disabled={!gitUrl.trim()} className={`${btnGhost} shrink-0`}>
+                  Clone
+                </button>
+              </div>
+              <p className="-mt-2 text-[0.7rem] text-faint">
+                A skill repository’s clone URL (GitHub, GitLab, …) — it arrives connected, so Sync pulls the
+                team’s updates.
+              </p>
               <input
                 ref={fileInputRef}
                 type="file"
