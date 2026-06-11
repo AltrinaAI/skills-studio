@@ -702,8 +702,25 @@ export interface MineState {
   found?: number;
   startedUnix?: number;
   terminalId?: string;
+  /** Run parameters from the record (absent when idle); agent is an AgentOption id. */
+  agent?: string;
+  model?: string;
+  effort?: string;
+  days?: number;
+  sources?: string[];
   /** Existing skills the run dirtied — clears once committed or discarded. */
   improved: string[];
+}
+
+/** One file in the current run dir (the single retained run). */
+export interface MineFile {
+  rel: string;
+  size: number;
+  modifiedUnix: number;
+}
+export interface MineFiles {
+  runDir: string;
+  files: MineFile[];
 }
 
 export interface MineStartArgs {
@@ -723,7 +740,7 @@ export interface MineStartArgs {
 
 export const mineSources = (days: number) => http<MineSource[]>("GET", `mine/sources?days=${days}`);
 /** The prompt a run with these settings would send — shown in the dialog for review/editing. */
-export const minePrompt = (args: { days: number; sources?: string[]; improve?: boolean }) =>
+export const minePrompt = (args: { days: number; improve?: boolean }) =>
   http<{ prompt: string }>("POST", "mine/prompt", { ...args });
 export const mineStart = (a: MineStartArgs) => http<MineState>("POST", "mine/start", { ...a });
 /** Restore every installed copy of the skill-miner to the official bundled
@@ -731,6 +748,8 @@ export const mineStart = (a: MineStartArgs) => http<MineState>("POST", "mine/sta
  *  uncommitted changes). Returns the restored roots. */
 export const mineReinstallMiner = () => http<{ roots: string[] }>("POST", "mine/reinstall-miner");
 export const mineState = () => http<MineState>("GET", "mine/state");
+/** The current run dir's files — the mining page's artifacts listing. */
+export const mineFiles = () => http<MineFiles>("GET", "mine/files");
 export const mineStop = () => http<{ ok: boolean }>("POST", "mine/stop").then(() => {});
 /** The run's conversation: returns its live terminal, or revives the recorded
  *  agent session in a fresh one (works after the original pane was closed). */

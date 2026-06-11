@@ -125,17 +125,21 @@ declaring the shared properties an integration needs:
   folders + the shared `~/.agents/skills` standard),
 - **trigger** — how to run it *programmatically*: a zero-interaction headless
   command line (no trust dialog, no approval prompts) that narrates progress
-  to the pane and records its session id to `<run_dir>/session-id`
+  to the pane, records its session id to `<run_dir>/session-id`, and creates
+  `<run_dir>/done` iff the run completed — the completion signal is
+  harness-written (claude: the stream-json `result` event via the bundled
+  renderer; codex: `exec`'s exit status), never entrusted to the prompt
   (`prepare` drops helper files it needs, e.g. claude's stream-json renderer),
 - **resume** — how to reopen that recorded session as the interactive TUI
   (this is what makes a finished run's conversation continuable even after
   its terminal is gone).
 
-Features consume capabilities, not names: mining composes
-`trigger; [ -f results.json ] && { resume; }`, terminal options carry a
-`canMine` flag (`agents::can_trigger`), and the UI degrades when a capability
-is `None` — a discovery-only agent (Cursor, Gemini CLI today) simply isn't
-offered for unattended runs. **Supporting a new agent = filling in one entry**;
+Features consume capabilities, not names: mining launches `trigger` and
+watches `<run_dir>/done`, "continue the conversation" revives the recorded
+session via `resume` on demand, terminal options carry a `canMine` flag
+(`agents::can_trigger`), and the UI degrades when a capability is `None` — a
+discovery-only agent (Cursor, Gemini CLI today) simply isn't offered for
+unattended runs. **Supporting a new agent = filling in one entry**;
 if its capability can't be expressed (no documented headless mode), leave it
 `None` rather than wiring an interactive command that can block on a prompt
 nobody will see.

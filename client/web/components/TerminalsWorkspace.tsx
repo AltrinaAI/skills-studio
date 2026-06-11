@@ -52,19 +52,8 @@ export default function TerminalsWorkspace({
   const [newOpen, setNewOpen] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // Deep link: /terminals?id=<session> selects that terminal (e.g. "Continue
-  // the conversation" from the mining card). Consumed once — the param is
-  // dropped so later visits don't keep forcing the selection.
   const location = useLocation();
   const navigate = useNavigate();
-  useEffect(() => {
-    if (!visible || embedded) return;
-    const want = new URLSearchParams(location.search).get("id");
-    if (want) {
-      setActiveId(want);
-      navigate("/terminals", { replace: true });
-    }
-  }, [visible, embedded, location.search, navigate]);
 
   const refresh = useCallback(async () => {
     try {
@@ -85,6 +74,20 @@ export default function TerminalsWorkspace({
     const t = setInterval(() => void refresh(), 5000);
     return () => clearInterval(t);
   }, [refresh]);
+
+  // Deep link: /terminals?id=<session> selects that terminal (e.g. "Continue
+  // the conversation" from the mining card — possibly created a moment ago,
+  // hence the refresh). Consumed once — the param is dropped so later visits
+  // don't keep forcing the selection.
+  useEffect(() => {
+    if (!visible || embedded) return;
+    const want = new URLSearchParams(location.search).get("id");
+    if (want) {
+      setActiveId(want);
+      void refresh();
+      navigate("/terminals", { replace: true });
+    }
+  }, [visible, embedded, location.search, navigate, refresh]);
 
   // Programmatic selection from the embedding host (e.g. the studio panel
   // focusing the mining conversation, possibly created a moment ago).

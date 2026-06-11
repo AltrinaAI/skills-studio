@@ -15,8 +15,7 @@ generate**.
 A small LLM must be reachable. Check it first:
 
 ```bash
-cd <this skill dir>/scripts
-python3 llm.py --check        # prints the backend it will use, or how to enable one
+python3 scripts/llm.py --check   # prints the backend it will use, or how to enable one
 ```
 
 Set one of `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY`, or have a
@@ -25,10 +24,13 @@ Set one of `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY`, or have a
 
 ## 1–2. Run the pipeline (scripts do the heavy, cheap-LLM work)
 
+Keep your working directory at the launch directory: all artifacts go under
+`./out` there — Skill Studio reads run progress from it.
+
 ```bash
-OUT=./skill-miner-out
-python3 discover.py  --since 35 --out $OUT/inventory.jsonl       # find transcripts across agents
-python3 extract.py   --inventory $OUT/inventory.jsonl --out $OUT/conversations.jsonl --workers 10
+OUT=./out
+python3 scripts/discover.py  --since 35 --out $OUT/inventory.jsonl       # find transcripts across agents
+python3 scripts/extract.py   --inventory $OUT/inventory.jsonl --out $OUT/conversations.jsonl --workers 10
 ```
 
 - `discover.py` walks each adapter in `common.py:ADAPTERS` (Claude Code, Codex;
@@ -76,7 +78,7 @@ Read `references/quality-bar.md` and apply it.
    inventory once to list the skills available on this machine and use that
    output to look up paths:
    ```bash
-   python3 skills_inventory.py
+   python3 scripts/skills_inventory.py
    ```
    Use this only to find files to edit; your context remains the source of truth
    for which skills are part of the landscape.

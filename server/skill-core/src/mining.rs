@@ -6,18 +6,19 @@
 // The judgment work (cluster, judge, author) is the agent's, per the skill's
 // own instructions; this module owns the run lifecycle around it: refresh the
 // installed copy of the skill, snapshot which skills were already dirty (so
-// mined edits are attributable — and user WIP is off-limits), compose the run
-// prompt, and report progress by watching the run dir's artifacts.
+// mined edits are attributable), compose the run prompt, and report progress
+// by watching the run dir's artifacts.
 //
 // skill-term depends on this crate, so this module cannot spawn terminals
 // itself; the route layer (skill-server) passes the spawn/alive/kill
 // operations in. Everything else lives here.
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::agents::{self, ResumeCtx, TriggerCtx};
+use crate::agents::{self, TriggerCtx};
 use crate::sync::copy_tree;
 use crate::{discover, gitops, secrets};
 
@@ -61,6 +62,10 @@ struct RunRecord {
     effort: String,
     improve: bool,
     terminal_id: String,
+    /// When a revival terminal was last spawned; within the startup grace the
+    /// recorded terminal is trusted without probing (see [`continue_run`]).
+    #[serde(default)]
+    continued_unix: u64,
     /// "running" | "done" | "stopped" — "done" / "stopped" are sticky.
     status: String,
     /// Every personal skill at run start with its dirty flag: the fixed set we
@@ -83,6 +88,19 @@ pub struct MineState {
     pub started_unix: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal_id: Option<String>,
+    /// Run parameters from the record (absent when idle) — the mining page's
+    /// run summary. `agent` is the AgentOption id; model/effort are "" when
+    /// the run used the CLI defaults.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub days: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sources: Option<Vec<String>>,
     /// Existing skills the run dirtied (clean at start, dirty now). Self-
     /// clearing: once the user saves a version or discards, the root drops out.
     pub improved: Vec<String>,
@@ -100,6 +118,16 @@ fn run_file() -> Result<PathBuf, String> {
 
 fn now_unix() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// Serializes every read-modify-write of the run record: routes run on
+/// concurrent workers, and an unguarded pair of continues would each spawn a
+/// revival terminal (the loser leaks — a live TUI is never GC'd).
+static RUN_LOCK: Mutex<()> = Mutex::new(());
+
+fn run_lock() -> MutexGuard<'static, ()> {
+    // The record lives on disk, not in the mutex — a poisoned lock is safe.
+    RUN_LOCK.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 fn load_run() -> Option<RunRecord> {
@@ -273,11 +301,9 @@ fn default_sources(sources: &[String]) -> Vec<String> {
 }
 
 /// The prompt a run with these settings would send — the dialog's editable
-/// preview. Pure read: no run-dir reset, no skill install, no record. The
-/// dirty set is re-snapshotted at start, so an unedited preview and the real
-/// prompt can only differ if a skill's dirtiness changed in between.
-pub fn preview_prompt(days: u64, sources: &[String], improve: bool) -> Result<String, String> {
-    Ok(compose_prompt(&run_dir()?, days, &default_sources(sources), improve, &dirty_candidates()))
+/// preview. Pure read: no run-dir reset, no skill install, no record.
+pub fn preview_prompt(days: u64, improve: bool) -> Result<String, String> {
+    Ok(compose_prompt(days, improve))
 }
 
 /// Set up a run: install the skill-miner where missing, snapshot the dirty
@@ -318,7 +344,7 @@ pub fn prepare_run(
     let sources = default_sources(sources);
     let prompt = match prompt_override.map(str::trim).filter(|p| !p.is_empty()) {
         Some(p) => p.to_string(),
-        None => compose_prompt(&rdir, days, &sources, improve, &candidates),
+        None => compose_prompt(days, improve),
     };
     Ok(PreparedRun {
         run_dir: rdir.to_string_lossy().into_owned(),
@@ -330,56 +356,33 @@ pub fn prepare_run(
     })
 }
 
-fn compose_prompt(
-    run_dir: &Path,
-    days: u64,
-    sources: &[String],
-    improve: bool,
-    candidates: &[Candidate],
-) -> String {
-    let rd = run_dir.to_string_lossy();
-    // Run-specific parameters and the app's output contract ONLY — the skill's
-    // own SKILL.md covers the pipeline, caps, staging area, quality bar and
-    // report content. Don't repeat any of it here. The skill is invoked by
-    // name: ensure_installed_in put it in the agent's skills dir, so it's
-    // already in the agent's available-skills list.
-    let mut lines = vec![
-        "Use skill-miner to analyze conversations on this machine for skills to create / update".to_string(),
-        String::new(),
-        "Run settings:".to_string(),
-        format!("- Window: last {days} days; sources: {}.", sources.join(", ")),
-        format!("- Write the script outputs under {rd}/out/."),
-    ];
-    if improve {
-        let dirty: Vec<&str> = candidates.iter().filter(|c| c.dirty).map(|c| c.root.as_str()).collect();
-        if !dirty.is_empty() {
-            lines.push(format!(
-                "- These skills have uncommitted user changes — don't touch them; list them as deferred:\n{}",
-                dirty.iter().map(|r| format!("    {r}")).collect::<Vec<_>>().join("\n")
-            ));
-        }
-    } else {
-        lines.push("- Do not edit any existing skill in place; only stage brand-new skills.".into());
+fn compose_prompt(days: u64, improve: bool) -> String {
+    // Run-specific parameters ONLY — the skill's own SKILL.md covers the
+    // pipeline, caps, staging area, quality bar, report content, and the
+    // output location (./out of the launch dir — the run dir, since the
+    // session spawns with cwd = run_dir; `state` watches it). Don't repeat
+    // any of it here. ensure_installed_in put the skill in the agent's skills
+    // dir, so the "mine agent conversations" ask matches its description in
+    // the agent's available-skills list.
+    let mut lines = vec![format!(
+        "Mine agent conversations in the past {days} days for skills to create / update"
+    )];
+    if !improve {
+        lines.push(String::new());
+        lines.push("Do not edit any existing skill in place; only stage brand-new skills.".into());
     }
-    lines.push(String::new());
     // No report file: the skill's own report step is the final message (visible
     // in the terminal, and the conversation stays resumable for follow-ups).
     // No structured results either — staged proposals surface via the skills
-    // scan and in-place edits via git dirty tracking, so the run's only output
-    // contract is the completion sentinel.
-    lines.push(format!("When finished, create an empty file at {rd}/done — last, as the completion signal."));
+    // scan, in-place edits via git dirty tracking, and completion via the
+    // trigger's [`agents::DONE_FILE`] — the prompt carries no output contract.
     lines.join("\n")
 }
 
-/// The full shell line for a mining run: the agent's headless TRIGGER (from
+/// The full shell line for a mining run: the agent's headless TRIGGER from
 /// the agent registry — zero-interaction, narrated live in the pane, session
-/// id recorded), chained — only after a SUCCESSFUL run (the done sentinel
-/// written) — into the agent's RESUME line, so opening the terminal afterwards lands
-/// in the very conversation that did the mining: ask it why it proposed
-/// something, or steer a refinement. (Interactive mode may show the agent's
-/// own one-time per-directory trust prompt there; nothing is blocked — the
-/// work is done.) Failed runs skip the chain so the pane ends at a shell and
-/// the run-state probe can see the agent exited.
+/// id recorded, [`agents::DONE_FILE`] written iff it completes. No resume is
+/// chained: continuing the conversation is [`continue_run`]'s job, on demand.
 ///
 /// None when the family has no headless trigger — the caller surfaces that
 /// as "this agent can't power mining runs".
@@ -392,11 +395,7 @@ pub fn launch_cmd(
     effort: Option<&str>,
 ) -> Option<String> {
     let def = agents::by_family(agent_family)?;
-    let trigger = (def.trigger?)(&TriggerCtx { bin, run_dir, prompt, model, effort });
-    let Some(resume) = def.resume else { return Some(trigger) };
-    let resume = resume(&ResumeCtx { bin, run_dir, model, effort });
-    let done = secrets::sh_quote(&run_dir.join("done").to_string_lossy());
-    Some(format!("{trigger}; [ -f {done} ] && {{ {resume}; }}"))
+    Some((def.trigger?)(&TriggerCtx { bin, run_dir, prompt, model, effort }))
 }
 
 /// Persist the run record once the terminal is up.
@@ -417,25 +416,40 @@ pub fn record_run(
         effort: effort.to_string(),
         improve: prep.improve,
         terminal_id: terminal_id.to_string(),
+        continued_unix: 0,
         status: "running".into(),
         candidates: prep.candidates,
     };
+    let _guard = run_lock();
     save_run(&rec)?;
-    state(|_| true, |_| true) // the session was just created; it's alive
+    state_inner(|_| true, |_| true) // the session was just created; it's alive
 }
 
-/// "Continue the conversation" target: the run's terminal if it's still
-/// alive, else a fresh terminal reviving the recorded session — the
-/// conversation outlives the pane (both the record and the agent's own
-/// session store live on disk). `spawn_resume` is the route layer's
+/// A revival younger than this is trusted without probing: under the
+/// `bash -lc` wrapper the TUI may not have forked yet, and probing it would
+/// read "exited" and spawn a duplicate.
+const REVIVE_GRACE_SECS: u64 = 60;
+
+/// "Continue the conversation" target: the recorded terminal while the agent
+/// is still live in it (the headless run, or an earlier revival), else a
+/// fresh terminal reviving the recorded session — the trigger chains no
+/// resume, so a finished run's pane ends at a bare shell. That pane is left
+/// alone (its scrollback holds the run's report and any failure output; the
+/// terminal GC reaps it); the record just moves to the new terminal.
+/// `spawn_resume` is the route layer's
 /// `create_session_resume(agent_id, cwd, model, effort)` — the terminal
 /// API's resume path, so the resume line is built in exactly one place.
 pub fn continue_run(
     session_exists: impl Fn(&str) -> bool,
+    agent_running: impl Fn(&str) -> bool,
     spawn_resume: impl Fn(&str, &str, Option<&str>, Option<&str>) -> Result<String, String>,
 ) -> Result<String, String> {
+    let _guard = run_lock();
     let mut rec = load_run().ok_or_else(|| "No mining run on record.".to_string())?;
-    if rec.status == "running" || session_exists(&rec.terminal_id) {
+    if rec.status == "running"
+        || now_unix().saturating_sub(rec.continued_unix) <= REVIVE_GRACE_SECS
+        || (session_exists(&rec.terminal_id) && agent_running(&rec.terminal_id))
+    {
         return Ok(rec.terminal_id);
     }
     let rdir = run_dir()?;
@@ -446,6 +460,7 @@ pub fn continue_run(
         Some(rec.effort.as_str()).filter(|e| !e.is_empty()),
     )?;
     rec.terminal_id = id.clone();
+    rec.continued_unix = now_unix();
     save_run(&rec)?;
     Ok(id)
 }
@@ -461,6 +476,14 @@ pub fn state(
     session_exists: impl Fn(&str) -> bool,
     agent_running: impl Fn(&str) -> bool,
 ) -> Result<MineState, String> {
+    let _guard = run_lock();
+    state_inner(session_exists, agent_running)
+}
+
+fn state_inner(
+    session_exists: impl Fn(&str) -> bool,
+    agent_running: impl Fn(&str) -> bool,
+) -> Result<MineState, String> {
     let Some(mut rec) = load_run() else {
         return Ok(MineState {
             status: "idle".into(),
@@ -468,6 +491,11 @@ pub fn state(
             found: None,
             started_unix: None,
             terminal_id: None,
+            agent: None,
+            model: None,
+            effort: None,
+            days: None,
+            sources: None,
             improved: Vec::new(),
         });
     };
@@ -476,7 +504,7 @@ pub fn state(
     // The done sentinel is the completion signal and outranks liveness probes:
     // it also recovers a record a flaky probe wrongly marked "stopped" while
     // the agent was in fact still working.
-    if rdir.join("done").exists() && (rec.status == "running" || rec.status == "stopped") {
+    if rdir.join(agents::DONE_FILE).exists() && (rec.status == "running" || rec.status == "stopped") {
         rec.status = "done".into();
         let _ = save_run(&rec);
     } else if rec.status == "running" {
@@ -518,12 +546,62 @@ pub fn state(
         found,
         started_unix: Some(rec.started_unix),
         terminal_id: Some(rec.terminal_id.clone()),
+        agent: Some(rec.agent.clone()),
+        model: Some(rec.model.clone()),
+        effort: Some(rec.effort.clone()),
+        days: Some(rec.days),
+        sources: Some(rec.sources.clone()),
         improved,
     })
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MineFile {
+    pub rel: String,
+    pub size: u64,
+    pub modified_unix: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MineFiles {
+    pub run_dir: String,
+    pub files: Vec<MineFile>,
+}
+
+/// Everything currently in the (single retained) run dir — rel path, size,
+/// mtime, newest first. Powers the mining page's artifacts listing; viewing a
+/// file goes through the generic read-file route with `run_dir` as the root.
+pub fn files() -> Result<MineFiles, String> {
+    fn walk(base: &Path, dir: &Path, out: &mut Vec<MineFile>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.filter_map(|e| e.ok()) {
+            let p = e.path();
+            if p.is_dir() {
+                walk(base, &p, out);
+            } else if let Ok(meta) = e.metadata() {
+                let rel = p.strip_prefix(base).unwrap_or(&p).to_string_lossy().into_owned();
+                let modified_unix = meta
+                    .modified()
+                    .ok()
+                    .and_then(|m| m.duration_since(UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                out.push(MineFile { rel, size: meta.len(), modified_unix });
+            }
+        }
+    }
+    let rdir = run_dir()?;
+    let mut files = Vec::new();
+    walk(&rdir, &rdir, &mut files);
+    files.sort_by(|a, b| b.modified_unix.cmp(&a.modified_unix).then_with(|| a.rel.cmp(&b.rel)));
+    Ok(MineFiles { run_dir: rdir.to_string_lossy().into_owned(), files })
+}
+
 /// Stop a running run: the route layer kills the terminal; we mark the record.
 pub fn stop(kill: impl Fn(&str) -> Result<(), String>) -> Result<(), String> {
+    let _guard = run_lock();
     let Some(mut rec) = load_run() else { return Ok(()) };
     if rec.status == "running" {
         let _ = kill(&rec.terminal_id);
@@ -565,7 +643,8 @@ mod tests {
     fn launch_cmd_uses_headless_modes() {
         let rd = Path::new("/tmp/run");
         // claude: print mode (skips the workspace-trust dialog by design),
-        // stream-json piped through the bundled live renderer.
+        // stream-json piped through the bundled live renderer, which also
+        // writes the done sentinel on a successful result event.
         let c = launch_cmd("claude", "/bin/claude", rd, "do the thing", Some("opus"), Some("max"))
             .expect("claude has a trigger");
         assert!(c.starts_with("'/bin/claude' -p 'do the thing'"));
@@ -573,25 +652,22 @@ mod tests {
         assert!(c.contains("--output-format stream-json"));
         assert!(c.contains("--model 'opus'"));
         assert!(c.contains("--effort 'max'"));
-        assert!(c.contains("| python3 -u '/tmp/run/watch.py' '/tmp/run/session-id'"));
-        // A successful run chains into the resumed interactive session, with
-        // the same model/effort tuning.
-        assert!(c.contains("[ -f '/tmp/run/done' ] && {"));
-        assert!(c.contains("--resume \"$(cat '/tmp/run/session-id')\" --model 'opus' --effort 'max'"));
+        assert!(c.contains("| python3 -u '/tmp/run/watch.py' '/tmp/run/session-id' '/tmp/run/done'"));
+        // No chained resume: continuing the conversation is continue_run's job.
+        assert!(!c.contains("--resume"));
         // model/effort omitted entirely when unset.
         let c2 = launch_cmd("claude", "/bin/claude", rd, "p", None, None).unwrap();
         assert!(!c2.contains("--model") && !c2.contains("--effort"));
-        // codex: exec subcommand, approvals off, effort via -c; the chained
-        // resume self-captures the session id from rollouts (not just --last).
+        // codex: exec subcommand, approvals off, effort via -c; its exit
+        // status writes the done sentinel.
         let x = launch_cmd("codex", "/bin/codex", rd, "do the thing", Some("gpt-5.5"), Some("xhigh"))
             .expect("codex has a trigger");
         assert!(x.starts_with("'/bin/codex' exec --skip-git-repo-check"));
-        assert!(x.contains("'do the thing' </dev/null"));
         assert!(x.contains("'approval_policy=\"never\"'"));
         assert!(x.contains("-m 'gpt-5.5'"));
         assert!(x.contains("'model_reasoning_effort=\"xhigh\"'"));
-        assert!(x.contains("[ -f '/tmp/run/done' ] && {"));
-        assert!(x.contains("resume \"$(cat '/tmp/run/session-id')\""));
+        assert!(x.contains("'do the thing' </dev/null && touch '/tmp/run/done'"));
+        assert!(!x.contains("resume"));
         // No headless trigger (discovery-only or unknown family) ⇒ no line.
         assert!(launch_cmd("cursor", "/bin/c", rd, "p", None, None).is_none());
         assert!(launch_cmd("shell", "/bin/bash", rd, "p", None, None).is_none());

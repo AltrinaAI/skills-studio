@@ -4,8 +4,9 @@
 //! - **skills_dirs** — where the agent discovers skills (its own folders, plus
 //!   the shared standard when `reads_shared`),
 //! - **trigger** — how to run it programmatically: a zero-interaction headless
-//!   command that narrates progress to the pane and records its session id to
-//!   `<run_dir>/`[`SESSION_FILE`] (`prepare` drops any helper files it needs),
+//!   command that narrates progress to the pane, records its session id to
+//!   `<run_dir>/`[`SESSION_FILE`], and creates `<run_dir>/`[`DONE_FILE`] iff it
+//!   completed successfully (`prepare` drops any helper files it needs),
 //! - **resume** — how to reopen that recorded session as the interactive TUI.
 //!
 //! Features (mining, install, terminals) consult this registry instead of
@@ -20,6 +21,12 @@ use crate::secrets::sh_quote as q;
 /// File inside a run dir where the trigger records the agent's session id;
 /// the resume line reads it back.
 pub const SESSION_FILE: &str = "session-id";
+
+/// File inside a run dir the trigger creates iff the run completed
+/// successfully — the completion signal callers watch. Harness-written
+/// (claude: watch.py on the final `result` event; codex: `exec`'s exit
+/// status), never entrusted to the model's prompt compliance.
+pub const DONE_FILE: &str = "done";
 
 /// Home-relative dirs of the shared Agent Skills standard, read by every
 /// `reads_shared` agent (Codex, Cursor, Gemini CLI, …; not Claude Code).
@@ -152,8 +159,9 @@ fn claude_prepare(run_dir: &Path) -> Result<(), String> {
 /// and every known skill home is passed as `--add-dir` so skill writes count
 /// as in-workspace edits rather than classifier round-trips (mirrors
 /// `codex_trigger`'s writable roots). Repeated classifier blocks abort a `-p`
-/// run — already the failure shape `launch_cmd` handles: no results.json, no
-/// resume chain. Note auto mode is model-gated (Opus/Sonnet 4.6+; not haiku).
+/// run — already the failure shape the run-state machine reads: no
+/// [`DONE_FILE`], the run surfaces as stopped. Note auto mode is model-gated
+/// (Opus/Sonnet 4.6+; not haiku).
 /// Plain `-p` prints nothing until the very end, so the stream-json feed pipes
 /// through the watcher `claude_prepare` dropped into the run dir, which
 /// narrates live and records the session id. `</dev/null`: the CLI otherwise
@@ -169,10 +177,11 @@ fn claude_trigger(c: &TriggerCtx) -> String {
         }
     }
     cmd.push_str(&format!(
-        " --output-format stream-json --verbose{tune} </dev/null | python3 -u {watch} {sid}",
+        " --output-format stream-json --verbose{tune} </dev/null | python3 -u {watch} {sid} {done}",
         tune = claude_tune(c.model, c.effort),
         watch = q(&c.run_dir.join("watch.py").to_string_lossy()),
         sid = q(&c.run_dir.join(SESSION_FILE).to_string_lossy()),
+        done = q(&c.run_dir.join(DONE_FILE).to_string_lossy()),
     ));
     cmd
 }
@@ -207,11 +216,16 @@ fn claude_tune(model: Option<&str>, effort: Option<&str>) -> String {
 const CLAUDE_WATCH_PY: &str = r#"#!/usr/bin/env python3
 # Live renderer for `claude -p --output-format stream-json --verbose` (stdin).
 # argv[1] (optional): file to write the session id to as soon as it's known,
-# so the launch line can chain `claude --resume` for follow-up conversation.
+# so `claude --resume` can revive the conversation later.
+# argv[2] (optional): file to create iff the run succeeds (`result` event with
+# is_error false) — the completion signal. The pipe eats claude's exit code,
+# so the renderer owns it. Keyed off is_error: subtype reads "success" even on
+# some API errors.
 import json, sys
 
 DIM, BOLD, CYAN, RED, RESET = "\033[2m", "\033[1m", "\033[36m", "\033[31m", "\033[0m"
 SID_OUT = sys.argv[1] if len(sys.argv) > 1 else None
+DONE_OUT = sys.argv[2] if len(sys.argv) > 2 else None
 
 def brief(inp):
     if not isinstance(inp, dict): return ""
@@ -252,6 +266,11 @@ for line in sys.stdin:
                 print(f"{RED}  ✗ {' '.join(str(s).split())[:160]}{RESET}")
     elif t == "result":
         ok = not o.get("is_error")
+        if ok and DONE_OUT:
+            try:
+                open(DONE_OUT, "w").close()
+            except OSError:
+                pass
         print(f"\n{BOLD}{'✓' if ok else '✗'} {o.get('subtype','done')}{RESET} {DIM}· {o.get('num_turns','?')} turns{RESET}")
         if not ok and o.get("result"): print(str(o.get("result"))[:400])
     sys.stdout.flush()
@@ -262,7 +281,9 @@ for line in sys.stdin:
 /// `exec` is codex's documented headless mode (no trust prompt, streams
 /// human-readable progress natively). The sandbox stays on (workspace-write)
 /// with every known skill home added as a writable root, network enabled for
-/// the run's LLM calls, and approvals off — nothing can answer them.
+/// the run's LLM calls, and approvals off — nothing can answer them. `exec`
+/// exits non-zero on failed/interrupted turns, so its exit status writes
+/// [`DONE_FILE`].
 fn codex_trigger(c: &TriggerCtx) -> String {
     let mut cmd = format!(
         "{} exec --skip-git-repo-check --sandbox workspace-write -c {} -c {}",
@@ -284,7 +305,11 @@ fn codex_trigger(c: &TriggerCtx) -> String {
     if let Some(e) = c.effort {
         cmd.push_str(&format!(" -c {}", q(&format!("model_reasoning_effort=\"{e}\""))));
     }
-    cmd.push_str(&format!(" {} </dev/null", q(c.prompt)));
+    cmd.push_str(&format!(
+        " {} </dev/null && touch {}",
+        q(c.prompt),
+        q(&c.run_dir.join(DONE_FILE).to_string_lossy())
+    ));
     cmd
 }
 

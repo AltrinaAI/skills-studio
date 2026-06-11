@@ -5,7 +5,7 @@ Walks each registered adapter (Claude Code, Codex, ...), keeps files touched in
 the last N days, and writes an inventory. Cheap: only stats files here; the full
 parse + LLM labeling happens in extract.py.
 
-  python3 discover.py --since 35 --out ./skill-miner-out/inventory.jsonl
+  python3 discover.py --since 35 --out ./out/inventory.jsonl
   python3 discover.py --agents codex --since 14
 """
 import argparse, os, json, time, sys
@@ -15,7 +15,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--since", type=int, default=35, help="max age in days (by file mtime)")
     ap.add_argument("--agents", default="", help="comma list; default = all registered adapters")
-    ap.add_argument("--out", default="./skill-miner-out/inventory.jsonl")
+    ap.add_argument("--out", default="./out/inventory.jsonl")
     args = ap.parse_args()
 
     agents = [a.strip() for a in args.agents.split(",") if a.strip()] or list(common.ADAPTERS)

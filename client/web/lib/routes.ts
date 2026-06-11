@@ -10,6 +10,9 @@
 /** The dedicated secret-manager page (machine-local store + future providers). */
 export const secretsPath = () => "/secrets";
 
+/** The mining page: the latest run's record and the files in its run dir. */
+export const miningPath = () => "/mining";
+
 /** The terminals workspace (always-mounted host; the URL just reveals it).
  *  Pass a session id to land with that terminal selected (e.g. jumping into
  *  the mining run's conversation); the workspace consumes the param. */

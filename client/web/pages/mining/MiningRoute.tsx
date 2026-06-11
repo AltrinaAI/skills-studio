@@ -1,0 +1,287 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import NavBar from "@/components/NavBar";
+import { Modal } from "@/components/Modal";
+import { btnGhost, Spinner } from "@/components/ui";
+import * as api from "@/lib/api";
+import type { AgentOption, MineFile, MineFiles } from "@/lib/api";
+import type { FileData } from "@/lib/types";
+import { refreshMining, useMining } from "@/lib/mining";
+import { terminalsPath } from "@/lib/routes";
+
+function timeAgo(unix: number): string {
+  const s = Math.max(0, Math.floor(Date.now() / 1000 - unix));
+  if (s < 60) return "just now";
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} hour${h === 1 ? "" : "s"} ago`;
+  const d = Math.floor(h / 24);
+  return `${d} day${d === 1 ? "" : "s"} ago`;
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+const STATUS_TONE: Record<string, string> = {
+  running: "text-info",
+  done: "text-ok",
+  stopped: "text-warn",
+};
+
+// What each well-known artifact is, so the listing reads as a story rather
+// than a bag of filenames.
+const FILE_HINTS: Record<string, string> = {
+  "run.json": "Run record (settings, status, dirty-skill snapshot)",
+  "out/inventory.jsonl": "Discovered sessions, one per line",
+  "out/conversations.jsonl": "Distilled conversations (theme, topics, feedback)",
+  "watch.py": "Live renderer for the agent's output stream",
+  "session-id": "The agent session id (powers Continue)",
+  done: "Completion signal (written by the run when it completes)",
+};
+
+/** One labeled value in the run summary row. */
+function Fact({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-[0.7rem] font-medium uppercase tracking-wider text-faint">{label}</dt>
+      <dd className="mt-0.5 text-sm text-fg">{value}</dd>
+    </div>
+  );
+}
+
+/**
+ * The mining page (route: /mining): the latest run's record and the live
+ * contents of its run dir. Only one run is retained — starting a new mine
+ * wipes this folder — so this is a window into "what just happened / what is
+ * happening", not a history. Reachable from the Home MineCard.
+ */
+export function Component() {
+  const navigate = useNavigate();
+  const mining = useMining();
+  const [agents, setAgents] = useState<AgentOption[]>([]);
+  const [files, setFiles] = useState<MineFiles | null>(null);
+  const [viewing, setViewing] = useState<FileData | null>(null);
+  const [opening, setOpening] = useState<string | null>(null);
+  const [continuing, setContinuing] = useState(false);
+
+  const refreshFiles = useCallback(() => {
+    api
+      .mineFiles()
+      .then(setFiles)
+      .catch(() => setFiles({ runDir: "", files: [] }));
+  }, []);
+  useEffect(() => {
+    refreshFiles();
+    void refreshMining();
+    api
+      .terminalAgents()
+      .then(setAgents)
+      .catch(() => {});
+  }, [refreshFiles]);
+  // Artifacts appear as the run progresses; re-list on status flips and on a
+  // slow tick while running (the state poll itself is the fast one).
+  const status = mining?.status;
+  useEffect(() => {
+    refreshFiles();
+    if (status !== "running") return;
+    const t = setInterval(refreshFiles, 5000);
+    return () => clearInterval(t);
+  }, [status, refreshFiles]);
+
+  const openFile = async (f: MineFile) => {
+    if (!files || opening) return;
+    setOpening(f.rel);
+    try {
+      setViewing(await api.readFile(files.runDir, f.rel));
+    } catch {
+      // Likely deleted by a new run starting; refresh the listing instead.
+      refreshFiles();
+    } finally {
+      setOpening(null);
+    }
+  };
+
+  const continueRun = async () => {
+    setContinuing(true);
+    try {
+      const { terminalId } = await api.mineContinue();
+      void refreshMining();
+      navigate(terminalsPath(terminalId));
+    } catch {
+      navigate(terminalsPath(mining?.terminalId));
+    } finally {
+      setContinuing(false);
+    }
+  };
+
+  const agentLabel = (id?: string) => {
+    if (!id) return "—";
+    const a = agents.find((x) => x.id === id);
+    return a ? `${a.label} (${a.flavorLabel})` : id;
+  };
+
+  const hasRun = mining != null && mining.status !== "idle";
+
+  return (
+    <div className="flex min-h-screen flex-col">
+      <NavBar
+        breadcrumb={
+          <>
+            <span className="text-faint" aria-hidden>
+              /
+            </span>
+            <span className="font-medium text-fg">Mining</span>
+          </>
+        }
+      />
+
+      <main className="mx-auto w-full max-w-3xl flex-1 px-6 pb-24 pt-10">
+        <h1 className="text-2xl font-semibold tracking-tight text-fg">Mining</h1>
+        <p className="mt-1.5 max-w-prose text-sm text-muted">
+          The most recent mining run and its working files. Only one run is kept — starting a new mine clears
+          this folder and replaces the record.
+        </p>
+
+        {mining === null ? (
+          <p className="mt-8 flex items-center gap-2 text-sm text-muted">
+            <Spinner className="h-3.5 w-3.5" /> Loading…
+          </p>
+        ) : !hasRun ? (
+          <p className="mt-8 text-sm text-muted">No mining run on record yet. Start one from the Home page.</p>
+        ) : (
+          <section className="mt-8 rounded-xl border border-border bg-surface p-4">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className={`text-sm font-semibold capitalize ${STATUS_TONE[mining.status] ?? "text-fg"}`}>
+                {mining.status === "running" && <Spinner className="mr-1.5 inline-block h-3 w-3" />}
+                {mining.status}
+                {mining.status === "running" && mining.stage ? ` — ${mining.stage}` : ""}
+              </span>
+              {mining.startedUnix != null && (
+                <span className="text-xs text-faint">started {timeAgo(mining.startedUnix)}</span>
+              )}
+              <span className="ml-auto flex items-center gap-2.5">
+                {mining.status === "running" ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => navigate(terminalsPath(mining.terminalId))}
+                      className="text-xs font-medium text-accent hover:opacity-80"
+                    >
+                      Watch
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void api.mineStop().then(() => refreshMining())}
+                      className="text-xs font-medium text-faint hover:text-danger"
+                    >
+                      Stop
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={continuing}
+                    onClick={() => void continueRun()}
+                    title="Reopens the mining conversation (revived if its terminal was closed)"
+                    className="text-xs font-medium text-accent hover:opacity-80 disabled:opacity-50"
+                  >
+                    {continuing ? "Opening…" : "Continue the conversation"}
+                  </button>
+                )}
+              </span>
+            </div>
+            <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
+              <Fact label="Agent" value={agentLabel(mining.agent)} />
+              <Fact label="Model" value={mining.model || "Default"} />
+              <Fact label="Effort" value={mining.effort || "Default"} />
+              <Fact label="Window" value={mining.days != null ? `Last ${mining.days} days` : "—"} />
+            </dl>
+            {(mining.improved.length > 0 || (mining.sources?.length ?? 0) > 0) && (
+              <p className="mt-3 text-xs text-muted">
+                Sources: {mining.sources?.join(", ") || "—"}
+                {mining.improved.length > 0 && (
+                  <>
+                    {" · "}Changed {mining.improved.length} skill{mining.improved.length === 1 ? "" : "s"}
+                  </>
+                )}
+              </p>
+            )}
+          </section>
+        )}
+
+        <section className="mt-8">
+          <div className="mb-2 flex items-baseline justify-between">
+            <h2 className="text-sm font-semibold text-fg">Run folder</h2>
+            {files && files.files.length > 0 && (
+              <button type="button" onClick={refreshFiles} className="text-xs text-faint hover:text-fg">
+                Refresh
+              </button>
+            )}
+          </div>
+          {files && files.runDir && (
+            <p className="mb-3 truncate font-mono text-xs text-faint" title={files.runDir}>
+              {files.runDir}
+            </p>
+          )}
+          {files === null ? (
+            <p className="flex items-center gap-2 text-sm text-muted">
+              <Spinner className="h-3.5 w-3.5" /> Listing…
+            </p>
+          ) : files.files.length === 0 ? (
+            <p className="text-sm text-muted">Empty — no run has left files here yet.</p>
+          ) : (
+            <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface">
+              {files.files.map((f) => (
+                <li key={f.rel}>
+                  <button
+                    type="button"
+                    onClick={() => void openFile(f)}
+                    disabled={opening !== null}
+                    className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-panel disabled:opacity-60"
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-mono text-sm text-fg">{f.rel}</span>
+                      {FILE_HINTS[f.rel] && (
+                        <span className="block truncate text-[0.7rem] text-faint">{FILE_HINTS[f.rel]}</span>
+                      )}
+                    </span>
+                    {opening === f.rel && <Spinner className="h-3 w-3 shrink-0" />}
+                    <span className="w-16 shrink-0 text-right text-xs text-muted">{formatSize(f.size)}</span>
+                    <span className="w-24 shrink-0 text-right text-xs text-faint">{timeAgo(f.modifiedUnix)}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </main>
+
+      {viewing && (
+        <Modal title={viewing.rel} onClose={() => setViewing(null)} widthClass="max-w-3xl">
+          <div className="px-5 py-4">
+            {viewing.tooLarge ? (
+              <p className="text-sm text-muted">
+                Too large to preview here ({formatSize(viewing.size)}). Open it from a terminal at the run dir.
+              </p>
+            ) : (
+              <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-all rounded-md bg-panel p-3 font-mono text-xs leading-relaxed text-fg">
+                {viewing.content ?? ""}
+              </pre>
+            )}
+            <div className="mt-3 flex justify-end">
+              <button type="button" onClick={() => setViewing(null)} className={btnGhost}>
+                Close
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}

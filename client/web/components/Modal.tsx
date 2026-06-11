@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
 /**
  * The shared dialog shell every modal in the app is built from: a centered card
@@ -30,6 +30,12 @@ export function Modal({
   widthClass?: string;
   children: ReactNode;
 }) {
+  // Backdrop dismissal needs press AND release on the backdrop itself: a
+  // plain click handler also fires when a drag that started inside the card
+  // (text selection, textarea resize) ends on the backdrop, because click
+  // targets the press/release pair's common ancestor.
+  const pressedBackdrop = useRef(false);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !dismissDisabled) onClose();
@@ -41,8 +47,11 @@ export function Modal({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      onClick={() => {
-        if (!dismissDisabled) onClose();
+      onPointerDown={(e) => {
+        pressedBackdrop.current = e.target === e.currentTarget;
+      }}
+      onPointerUp={(e) => {
+        if (pressedBackdrop.current && e.target === e.currentTarget && !dismissDisabled) onClose();
       }}
     >
       <div

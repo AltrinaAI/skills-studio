@@ -9,8 +9,8 @@ subject genuinely shifts) and `feedback` (a short natural-language summary of
 explicit user feedback — corrections, durable preferences, asserted domain
 facts; "" for most sessions). Writes conversations.jsonl.
 
-  python3 extract.py --inventory ./skill-miner-out/inventory.jsonl \
-                     --out ./skill-miner-out/conversations.jsonl --workers 12
+  python3 extract.py --inventory ./out/inventory.jsonl \
+                     --out ./out/conversations.jsonl --workers 12
   python3 extract.py --limit 10        # quick sample while testing
 """
 import argparse, json, os, sys
@@ -56,8 +56,8 @@ def label(condensed):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--inventory", default="./skill-miner-out/inventory.jsonl")
-    ap.add_argument("--out", default="./skill-miner-out/conversations.jsonl")
+    ap.add_argument("--inventory", default="./out/inventory.jsonl")
+    ap.add_argument("--out", default="./out/conversations.jsonl")
     ap.add_argument("--workers", type=int, default=10)
     ap.add_argument("--limit", type=int, default=0, help="cap conversations (testing)")
     args = ap.parse_args()

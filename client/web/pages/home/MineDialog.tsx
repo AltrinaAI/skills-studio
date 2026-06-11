@@ -273,7 +273,7 @@ export default function MineDialog({ onClose, onStarted }: { onClose: () => void
               setPrompt(e.target.value);
               setPromptEdited(true);
             }}
-            rows={9}
+            rows={Math.max(2, Math.min(12, prompt.split("\n").reduce((n, l) => n + Math.max(1, Math.ceil(l.length / 50)), 0)))}
             spellCheck={false}
             className="w-full resize-y rounded-md border border-border bg-surface px-2.5 py-2 font-mono text-xs leading-relaxed text-fg outline-none focus:border-accent"
           />

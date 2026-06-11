@@ -16,7 +16,7 @@ import * as api from "@/lib/api";
 import type { AgentSkills, DiscoveredSkill, MineState } from "@/lib/api";
 import { useMining, refreshMining } from "@/lib/mining";
 import { useNavigate } from "react-router-dom";
-import { studioPath, markdownPath, terminalsPath } from "@/lib/routes";
+import { studioPath, markdownPath, miningPath, terminalsPath } from "@/lib/routes";
 
 const EXAMPLES = [
   { name: "docx", path: "examples/docx", blurb: "Create & edit Word documents" },
@@ -409,6 +409,7 @@ function MineCard({
   onWatch,
   onContinue,
   onOpen,
+  onDetails,
 }: {
   mining: MineState | null;
   wide?: boolean;
@@ -417,29 +418,53 @@ function MineCard({
   onWatch: () => void;
   onContinue: () => Promise<void>;
   onOpen: (p: string) => void;
+  onDetails: () => void;
 }) {
   const running = mining?.status === "running";
   const hasRun = mining != null && mining.status !== "idle";
   const improved = mining?.improved ?? [];
   const [continuing, setContinuing] = useState(false);
   const description = (
-    <p className="text-xs leading-relaxed text-muted">Analyze your conversations to create / update skills</p>
+    <p className="text-xs leading-relaxed text-muted">Analyze your past conversations to create / update skills</p>
   );
+  // The whole card opens the mining page; every inner control stops the
+  // bubble so its own action doesn't also navigate.
   const actions =
     running && mining ? (
       <div className={`flex items-center gap-2 text-xs ${wide ? "min-w-0" : "mt-auto pt-1"}`}>
         <Spinner className="h-3 w-3 shrink-0" />
         <span className="min-w-0 flex-1 truncate text-muted">{stageText(mining)}</span>
-        <button type="button" onClick={onWatch} className="shrink-0 font-medium text-accent hover:opacity-80">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onWatch();
+          }}
+          className="shrink-0 font-medium text-accent hover:opacity-80"
+        >
           Watch
         </button>
-        <button type="button" onClick={onStop} className="shrink-0 font-medium text-faint hover:text-danger">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onStop();
+          }}
+          className="shrink-0 font-medium text-faint hover:text-danger"
+        >
           Stop
         </button>
       </div>
     ) : (
       <div className={`flex flex-wrap items-center gap-x-2.5 gap-y-1 ${wide ? "" : "mt-auto pt-1"}`}>
-          <button type="button" onClick={onMine} className={`${btnPrimary} inline-flex items-center gap-1.5`}>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onMine();
+            }}
+            className={`${btnPrimary} inline-flex items-center gap-1.5`}
+          >
             <PickaxeIcon />
             Mine
           </button>
@@ -447,7 +472,8 @@ function MineCard({
             <button
               type="button"
               disabled={continuing}
-              onClick={() => {
+              onClick={(e) => {
+                e.stopPropagation();
                 setContinuing(true);
                 void onContinue().finally(() => setContinuing(false));
               }}
@@ -467,7 +493,11 @@ function MineCard({
       </div>
     );
   return (
-    <section className="flex flex-1 flex-col gap-1 rounded-xl border border-[color-mix(in_srgb,var(--info)_35%,transparent)] bg-surface p-3">
+    <section
+      onClick={onDetails}
+      title="Mining details — the latest run and its files"
+      className="flex flex-1 cursor-pointer flex-col gap-1 rounded-xl border border-[color-mix(in_srgb,var(--info)_35%,transparent)] bg-surface p-3 transition-colors hover:border-[color-mix(in_srgb,var(--info)_60%,transparent)] hover:bg-panel"
+    >
       {wide ? (
         <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1.5">
           {description}
@@ -486,7 +516,10 @@ function MineCard({
             <button
               key={root}
               type="button"
-              onClick={() => onOpen(root)}
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpen(root);
+              }}
               className="rounded-md bg-panel px-1.5 py-0.5 font-mono text-[0.7rem] text-fg hover:text-accent"
             >
               {baseName(root)}
@@ -770,7 +803,7 @@ export function Component() {
                         {r.kind === "markdown" ? <FileIcon name={r.name} /> : <FolderIcon open={false} name={r.name} />}
                         <span className="truncate text-sm font-semibold text-fg">{r.name}</span>
                       </span>
-                      <span className="mt-auto truncate font-mono text-[0.7rem] text-faint" title={r.root}>
+                      <span className="truncate font-mono text-[0.7rem] text-faint" title={r.root}>
                         {r.root}
                       </span>
                     </button>
@@ -797,6 +830,7 @@ export function Component() {
               onWatch={() => navigate(terminalsPath(mining?.terminalId))}
               onContinue={continueMining}
               onOpen={onOpen}
+              onDetails={() => navigate(miningPath())}
             />
           </section>
         </div>

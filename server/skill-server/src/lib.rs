@@ -669,6 +669,9 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             let days = query_param(url, "days").and_then(|d| d.parse().ok()).unwrap_or(35);
             json_reply(Ok(mining::sources(days)))
         }
+        // The current run dir's files (the single retained run) — the mining
+        // page's artifacts listing.
+        (Method::Get, "/api/mine/files") => json_reply(mining::files()),
         // Restore every installed copy of the skill-miner to the official
         // bundled version (any .git the user created is preserved, so the
         // refresh lands as ordinary reviewable uncommitted changes).
@@ -680,13 +683,8 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
         // it for review/editing; an edited prompt comes back via mine/start.
         (Method::Post, "/api/mine/prompt") => {
             let days = v.get("days").and_then(|x| x.as_u64()).unwrap_or(35);
-            let sources: Vec<String> = v
-                .get("sources")
-                .and_then(|x| x.as_array())
-                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-                .unwrap_or_default();
             let improve = v.get("improve").and_then(|x| x.as_bool()).unwrap_or(true);
-            json_reply(mining::preview_prompt(days, &sources, improve).map(|p| json!({ "prompt": p })))
+            json_reply(mining::preview_prompt(days, improve).map(|p| json!({ "prompt": p })))
         }
         (Method::Post, "/api/mine/start") => {
             let days = v.get("days").and_then(|x| x.as_u64()).unwrap_or(35);
@@ -732,21 +730,24 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
                 mining::record_run(prep, &agent, model.trim(), effort.trim(), &sess.id)
             })())
         }
-        // The run's conversation, revived if its terminal is gone — via the
-        // terminal API's resume path (create_session_resume), the same one
-        // `terminal/create {resume:true}` takes.
+        // The run's conversation: the recorded terminal while the agent is
+        // live in it, else revived — via the terminal API's resume path
+        // (create_session_resume), the same one `terminal/create {resume:true}`
+        // takes.
         (Method::Post, "/api/mine/continue") => {
             let exists = |id: &str| {
                 skill_term::list_sessions()
                     .map(|ss| ss.iter().any(|s| s.id == id))
                     .unwrap_or(false)
             };
+            let running = |id: &str| !skill_term::agent_exited(id);
             let spawn = |agent_id: &str, cwd: &str, model: Option<&str>, effort: Option<&str>| {
                 skill_term::create_session_resume(agent_id, cwd, 200, 50, model, effort)
                     .map(|s| s.id)
             };
             json_reply(
-                mining::continue_run(exists, spawn).map(|id| json!({ "terminalId": id })),
+                mining::continue_run(exists, running, spawn)
+                    .map(|id| json!({ "terminalId": id })),
             )
         }
         (Method::Get, "/api/mine/state") => {
