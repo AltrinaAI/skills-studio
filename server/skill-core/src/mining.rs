@@ -19,7 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::agents::{self, TriggerCtx};
-use crate::sync::copy_tree;
+use crate::sync::install_skill;
 use crate::{discover, gitops, secrets};
 
 /// Where the miner's transcript adapters look, mirrored here only to give the
@@ -250,26 +250,6 @@ pub fn reinstall_miner(bundled: Option<&Path>) -> Result<Vec<String>, String> {
         restored.push(target.to_string_lossy().into_owned());
     }
     Ok(restored)
-}
-
-/// Install (or reinstall) a bundled skill into `dest`, replacing its content
-/// while preserving any `.git` the user created there. A versioned copy thus
-/// receives an official update as ordinary uncommitted changes — reviewable
-/// and revertable chunk by chunk — never as silent loss of their history.
-fn install_skill(src: &Path, dest: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
-    let rd = std::fs::read_dir(dest).map_err(|e| e.to_string())?;
-    for entry in rd.filter_map(|e| e.ok()) {
-        if entry.file_name() == ".git" {
-            continue;
-        }
-        let p = entry.path();
-        let is_dir = entry.file_type().map(|t| t.is_dir() && !t.is_symlink()).unwrap_or(false);
-        let res = if is_dir { std::fs::remove_dir_all(&p) } else { std::fs::remove_file(&p) };
-        res.map_err(|e| e.to_string())?;
-    }
-    let mut total = 0;
-    copy_tree(src, dest, &mut total)
 }
 
 /// Everything the route layer needs to spawn the run's terminal.
@@ -614,30 +594,6 @@ pub fn stop(kill: impl Fn(&str) -> Result<(), String>) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn install_skill_preserves_git_and_replaces_content() {
-        let base = std::env::temp_dir().join(format!("ass_mine_install_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        let src = base.join("src");
-        std::fs::create_dir_all(src.join("scripts")).unwrap();
-        std::fs::write(src.join("SKILL.md"), "official v2").unwrap();
-        std::fs::write(src.join("scripts/new.py"), "new").unwrap();
-        // Installed copy: user-versioned (.git), user-edited, with a stale file.
-        let dest = base.join("dest");
-        std::fs::create_dir_all(dest.join(".git")).unwrap();
-        std::fs::write(dest.join(".git/HEAD"), "ref: refs/heads/master").unwrap();
-        std::fs::write(dest.join("SKILL.md"), "user-edited").unwrap();
-        std::fs::write(dest.join("stale.md"), "removed upstream").unwrap();
-
-        install_skill(&src, &dest).unwrap();
-
-        assert_eq!(std::fs::read_to_string(dest.join("SKILL.md")).unwrap(), "official v2");
-        assert!(dest.join(".git/HEAD").exists(), ".git must survive a reinstall");
-        assert!(!dest.join("stale.md").exists(), "files dropped upstream are removed");
-        assert!(dest.join("scripts/new.py").exists());
-        let _ = std::fs::remove_dir_all(&base);
-    }
 
     #[test]
     fn launch_cmd_uses_headless_modes() {

@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::sync::copy_tree;
+use crate::sync::install_skill;
 
 const BOOTSTRAP_SKILL: &str = "load-secrets";
 
@@ -396,12 +396,7 @@ fn install_bootstrap_skill_in(home: &Path, skill_src: &Path) -> Result<Vec<Strin
         }
         let skills_dir = home.join(dest.skills_rel);
         let target = skills_dir.join(BOOTSTRAP_SKILL);
-        if target.exists() {
-            std::fs::remove_dir_all(&target).map_err(|e| e.to_string())?;
-        }
-        std::fs::create_dir_all(&skills_dir).map_err(|e| e.to_string())?;
-        let mut total = 0;
-        copy_tree(skill_src, &target, &mut total)?;
+        install_skill(skill_src, &target)?;
         // Clear copies installed under a former name in the same location.
         for old in LEGACY_SKILL_NAMES {
             let stale = skills_dir.join(old);

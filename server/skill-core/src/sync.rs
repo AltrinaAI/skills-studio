@@ -640,6 +640,34 @@ pub(crate) fn copy_tree(src: &Path, dst: &Path, total: &mut u64) -> Result<(), S
     Ok(())
 }
 
+/// Install (or reinstall) a bundled skill into `dest`, replacing its content
+/// while preserving any `.git` the user created there. A versioned copy thus
+/// receives an official update as ordinary uncommitted changes — reviewable
+/// and revertable chunk by chunk — never as silent loss of their history.
+/// A symlinked `dest` is replaced by a real directory: discovery doesn't
+/// follow links, so writing through one leaves the location looking empty.
+pub(crate) fn install_skill(src: &Path, dest: &Path) -> Result<(), String> {
+    let is_link = std::fs::symlink_metadata(dest).map(|m| m.file_type().is_symlink()).unwrap_or(false);
+    if is_link {
+        std::fs::remove_file(dest)
+            .or_else(|_| std::fs::remove_dir(dest)) // Windows dir-symlinks
+            .map_err(|e| e.to_string())?;
+    }
+    std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    let rd = std::fs::read_dir(dest).map_err(|e| e.to_string())?;
+    for entry in rd.filter_map(|e| e.ok()) {
+        if entry.file_name() == ".git" {
+            continue;
+        }
+        let p = entry.path();
+        let is_dir = entry.file_type().map(|t| t.is_dir() && !t.is_symlink()).unwrap_or(false);
+        let res = if is_dir { std::fs::remove_dir_all(&p) } else { std::fs::remove_file(&p) };
+        res.map_err(|e| e.to_string())?;
+    }
+    let mut total = 0;
+    copy_tree(src, dest, &mut total)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -671,6 +699,54 @@ mod tests {
         assert!(dst.join("SKILL.md").exists());
         assert!(dst.join("scripts/run.py").exists());
         assert!(!dst.join(".git").exists(), ".git must be skipped");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn install_skill_preserves_git_and_replaces_content() {
+        let base = std::env::temp_dir().join(format!("ass_sync_install_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let src = base.join("src");
+        std::fs::create_dir_all(src.join("scripts")).unwrap();
+        std::fs::write(src.join("SKILL.md"), "official v2").unwrap();
+        std::fs::write(src.join("scripts/new.py"), "new").unwrap();
+        // Installed copy: user-versioned (.git), user-edited, with a stale file.
+        let dest = base.join("dest");
+        std::fs::create_dir_all(dest.join(".git")).unwrap();
+        std::fs::write(dest.join(".git/HEAD"), "ref: refs/heads/master").unwrap();
+        std::fs::write(dest.join("SKILL.md"), "user-edited").unwrap();
+        std::fs::write(dest.join("stale.md"), "removed upstream").unwrap();
+
+        install_skill(&src, &dest).unwrap();
+
+        assert_eq!(std::fs::read_to_string(dest.join("SKILL.md")).unwrap(), "official v2");
+        assert!(dest.join(".git/HEAD").exists(), ".git must survive a reinstall");
+        assert!(!dest.join("stale.md").exists(), "files dropped upstream are removed");
+        assert!(dest.join("scripts/new.py").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_skill_replaces_symlinked_dest_with_real_dir() {
+        let base = std::env::temp_dir().join(format!("ass_sync_install_ln_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("SKILL.md"), "official").unwrap();
+        // dest is a symlink into another location (the sync-as-link layout).
+        let elsewhere = base.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("SKILL.md"), "old").unwrap();
+        let dest = base.join("dest");
+        std::os::unix::fs::symlink(&elsewhere, &dest).unwrap();
+
+        install_skill(&src, &dest).unwrap();
+
+        assert!(!is_symlink(&dest), "the link is replaced by a real directory");
+        assert_eq!(std::fs::read_to_string(dest.join("SKILL.md")).unwrap(), "official");
+        // The old link target is left untouched.
+        assert_eq!(std::fs::read_to_string(elsewhere.join("SKILL.md")).unwrap(), "old");
         let _ = std::fs::remove_dir_all(&base);
     }
 
