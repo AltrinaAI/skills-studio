@@ -146,23 +146,35 @@ fn claude_prepare(run_dir: &Path) -> Result<(), String> {
 
 /// Print mode (`-p`) is the documented zero-interaction path: it skips the
 /// per-directory workspace-trust dialog by design, whereas the interactive TUI
-/// blocks on it in a fresh dir with no flag to suppress it. bypassPermissions
-/// because nobody is watching to answer prompts, and the run must read
-/// transcripts and write skill dirs outside its cwd — the equivalent allowlist
-/// (unrestricted Bash + Read + Write) would be bypass anyway. Plain `-p`
-/// prints nothing until the very end, so the stream-json feed pipes through
-/// the watcher `claude_prepare` dropped into the run dir, which narrates live
-/// and records the session id. `</dev/null`: the CLI otherwise waits on stdin.
+/// blocks on it in a fresh dir with no flag to suppress it. Permission mode is
+/// `auto` (classifier-reviewed autonomy, CLI v2.1.83+), not bypassPermissions:
+/// reads are auto-approved everywhere, which covers the transcript sources,
+/// and every known skill home is passed as `--add-dir` so skill writes count
+/// as in-workspace edits rather than classifier round-trips (mirrors
+/// `codex_trigger`'s writable roots). Repeated classifier blocks abort a `-p`
+/// run — already the failure shape `launch_cmd` handles: no results.json, no
+/// resume chain. Note auto mode is model-gated (Opus/Sonnet 4.6+; not haiku).
+/// Plain `-p` prints nothing until the very end, so the stream-json feed pipes
+/// through the watcher `claude_prepare` dropped into the run dir, which
+/// narrates live and records the session id. `</dev/null`: the CLI otherwise
+/// waits on stdin.
 fn claude_trigger(c: &TriggerCtx) -> String {
-    let sid = q(&c.run_dir.join(SESSION_FILE).to_string_lossy());
-    format!(
-        "{bin} -p {prompt} --permission-mode bypassPermissions --output-format stream-json \
-         --verbose{tune} </dev/null | python3 -u {watch} {sid}",
-        bin = q(c.bin),
-        prompt = q(c.prompt),
+    let mut cmd = format!("{} -p {} --permission-mode auto", q(c.bin), q(c.prompt));
+    if let Some(home) = dirs::home_dir() {
+        for rel in all_skills_dirs() {
+            let dir = home.join(rel);
+            if dir.exists() {
+                cmd.push_str(&format!(" --add-dir {}", q(&dir.to_string_lossy())));
+            }
+        }
+    }
+    cmd.push_str(&format!(
+        " --output-format stream-json --verbose{tune} </dev/null | python3 -u {watch} {sid}",
         tune = claude_tune(c.model, c.effort),
         watch = q(&c.run_dir.join("watch.py").to_string_lossy()),
-    )
+        sid = q(&c.run_dir.join(SESSION_FILE).to_string_lossy()),
+    ));
+    cmd
 }
 
 /// Sessions are project-scoped, so this must run with cwd = the run dir (the

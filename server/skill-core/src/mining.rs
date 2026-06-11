@@ -171,7 +171,7 @@ fn count_recent(base: &Path, ext: &str, depth: usize, cutoff: SystemTime) -> usi
 /// Per location it installs only when missing: each installed copy is the
 /// user's afterwards — editable and versionable — and runs never overwrite it;
 /// deleting a copy restores the official version on the next run. Returns the
-/// primary copy (the shared dir when eligible) for the run prompt to reference.
+/// primary copy (the shared dir when eligible).
 fn ensure_installed_in(home: &Path, bundled: Option<&Path>) -> Result<PathBuf, String> {
     let bundled = bundled.filter(|s| s.join("SKILL.md").exists());
     let missing_src = || "Bundled skill-miner skill not found.".to_string();
@@ -248,7 +248,7 @@ pub fn prepare_run(
         .ok_or_else(|| format!("{agent_family} has no headless mode — mining needs an agent that can run unattended."))?;
     let home = dirs::home_dir().ok_or_else(|| "Cannot locate home directory.".to_string())?;
 
-    let installed = ensure_installed_in(&home, bundled_miner)?;
+    ensure_installed_in(&home, bundled_miner)?;
 
     // Snapshot the dirty flag of every personal skill: dirty ones are off-limits
     // to the run (user WIP), and clean ones that turn dirty are the run's edits.
@@ -274,7 +274,7 @@ pub fn prepare_run(
     } else {
         sources.to_vec()
     };
-    let prompt = compose_prompt(&rdir, &installed, days, &sources, improve, &candidates);
+    let prompt = compose_prompt(&rdir, days, &sources, improve, &candidates);
     Ok(PreparedRun {
         run_dir: rdir.to_string_lossy().into_owned(),
         prompt,
@@ -287,19 +287,19 @@ pub fn prepare_run(
 
 fn compose_prompt(
     run_dir: &Path,
-    skill_dir: &Path,
     days: u64,
     sources: &[String],
     improve: bool,
     candidates: &[Candidate],
 ) -> String {
     let rd = run_dir.to_string_lossy();
-    let sd = skill_dir.to_string_lossy();
     // Run-specific parameters and the app's output contract ONLY — the skill's
     // own SKILL.md covers the pipeline, caps, staging area, quality bar and
-    // report content. Don't repeat any of it here.
+    // report content. Don't repeat any of it here. The skill is invoked by
+    // name: ensure_installed_in put it in the agent's skills dir, so it's
+    // already in the agent's available-skills list.
     let mut lines = vec![
-        format!("Read and follow the skill at {sd}/SKILL.md."),
+        "Use your skill-miner skill and follow it.".to_string(),
         String::new(),
         "Run settings:".to_string(),
         format!("- Window: last {days} days; sources: {}.", sources.join(", ")),
@@ -533,7 +533,7 @@ mod tests {
         let c = launch_cmd("claude", "/bin/claude", rd, "do the thing", Some("opus"), Some("max"))
             .expect("claude has a trigger");
         assert!(c.starts_with("'/bin/claude' -p 'do the thing'"));
-        assert!(c.contains("--permission-mode bypassPermissions"));
+        assert!(c.contains("--permission-mode auto"));
         assert!(c.contains("--output-format stream-json"));
         assert!(c.contains("--model 'opus'"));
         assert!(c.contains("--effort 'max'"));
