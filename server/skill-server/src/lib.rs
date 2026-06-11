@@ -713,19 +713,18 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
                     prompt_override,
                     bundled.as_deref(),
                 )?;
-                // Headless launch via the agent registry's trigger: the
-                // documented zero-interaction path — no trust dialog, no
-                // approval prompts nobody is watching for. The pane still
-                // streams the run live.
+                // The agent registry's interactive launch: the TUI with the
+                // run prompt pre-submitted — an ordinary agent session. The
+                // client navigates the user to this terminal, where any
+                // first-run trust dialog or approval prompt is answered.
                 let cmd = mining::launch_cmd(
                     &opt.agent,
                     &opt.bin,
-                    Path::new(&prep.run_dir),
                     &prep.prompt,
                     Some(model.trim()).filter(|m| !m.is_empty()),
                     Some(effort.trim()).filter(|e| !e.is_empty()),
                 )
-                .ok_or_else(|| format!("{} can't run mining unattended.", opt.label))?;
+                .ok_or_else(|| format!("{} can't run skill mining yet.", opt.label))?;
                 let sess = skill_term::create_session_cmd(&agent, &prep.run_dir, 200, 50, &cmd)?;
                 mining::record_run(prep, &agent, model.trim(), effort.trim(), &sess.id)
             })())

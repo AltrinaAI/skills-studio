@@ -35,7 +35,15 @@ const selectCls =
  * every transcript store found on this machine is mined (no source picking),
  * so the only knobs are window, agent, and the agent's model/effort.
  */
-export default function MineDialog({ onClose, onStarted }: { onClose: () => void; onStarted: () => void }) {
+export default function MineDialog({
+  onClose,
+  onStarted,
+}: {
+  onClose: () => void;
+  /** Called with the run's terminal id, so the caller can navigate the user
+   *  straight to the live session (first-run dialogs are answered there). */
+  onStarted: (terminalId?: string) => void;
+}) {
   const [days, setDays] = useState(35);
   const [sources, setSources] = useState<MineSource[] | null>(null);
   const [agents, setAgents] = useState<AgentOption[] | null>(null);
@@ -74,8 +82,8 @@ export default function MineDialog({ onClose, onStarted }: { onClose: () => void
     };
   }, [days]);
 
-  // The mine needs an agent the server's registry can run unattended
-  // (headless trigger + resumable session) — capability, not family names.
+  // The mine needs an agent the server's registry can launch interactively
+  // with the prompt pre-submitted — capability, not family names.
   useEffect(() => {
     api
       .terminalAgents()
@@ -110,7 +118,7 @@ export default function MineDialog({ onClose, onStarted }: { onClose: () => void
     setBusy(true);
     setErr(null);
     try {
-      await api.mineStart({
+      const state = await api.mineStart({
         days,
         sources: [],
         agent,
@@ -119,7 +127,7 @@ export default function MineDialog({ onClose, onStarted }: { onClose: () => void
         prompt,
       });
       await refreshMining();
-      onStarted();
+      onStarted(state.terminalId);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Couldn’t start mining");
       setBusy(false);
@@ -160,9 +168,9 @@ export default function MineDialog({ onClose, onStarted }: { onClose: () => void
         className="space-y-4 px-5 py-4"
       >
         <p className="text-xs leading-relaxed text-muted">
-          Skill Studio studies your recent agent sessions for work you keep redoing. The run happens on this
-          machine, in a terminal you can watch, using your own agent and keys — no new service sees your
-          sessions.
+          Skill Studio studies your recent agent sessions for work you keep redoing. The run is a live agent
+          session on this machine — you&rsquo;ll be taken to its terminal — using your own agent and keys; no
+          new service sees your sessions.
         </p>
 
         <div className="flex items-start gap-3">

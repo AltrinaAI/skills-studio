@@ -30,8 +30,15 @@ function formatSize(bytes: number): string {
 
 const STATUS_TONE: Record<string, string> = {
   running: "text-info",
-  done: "text-ok",
-  stopped: "text-warn",
+  ended: "text-fg",
+};
+
+// "reviewing" is the open-conversation steady state (it can last days once
+// the report landed), so don't present it as in-flight work.
+const STAGE_LABEL: Record<string, string> = {
+  scanning: "scanning",
+  analyzing: "analyzing",
+  reviewing: "conversation open",
 };
 
 // What each well-known artifact is, so the listing reads as a story rather
@@ -40,9 +47,6 @@ const FILE_HINTS: Record<string, string> = {
   "run.json": "Run record (settings, status, dirty-skill snapshot)",
   "out/inventory.jsonl": "Discovered sessions, one per line",
   "out/conversations.jsonl": "Distilled conversations (theme, topics, feedback)",
-  "watch.py": "Live renderer for the agent's output stream",
-  "session-id": "The agent session id (powers Continue)",
-  done: "Completion signal (written by the run when it completes)",
 };
 
 /** One labeled value in the run summary row. */
@@ -160,7 +164,9 @@ export function Component() {
               <span className={`text-sm font-semibold capitalize ${STATUS_TONE[mining.status] ?? "text-fg"}`}>
                 {mining.status === "running" && <Spinner className="mr-1.5 inline-block h-3 w-3" />}
                 {mining.status}
-                {mining.status === "running" && mining.stage ? ` — ${mining.stage}` : ""}
+                {mining.status === "running" && mining.stage
+                  ? ` — ${STAGE_LABEL[mining.stage] ?? mining.stage}`
+                  : ""}
               </span>
               {mining.startedUnix != null && (
                 <span className="text-xs text-faint">started {timeAgo(mining.startedUnix)}</span>

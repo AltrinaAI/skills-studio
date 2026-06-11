@@ -377,21 +377,13 @@ function PickaxeIcon({ className = "", size = 13 }: { className?: string; size?:
   );
 }
 
-function timeAgo(unix: number): string {
-  const mins = Math.max(0, Math.round((Date.now() / 1000 - unix) / 60));
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins} min ago`;
-  const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
-  const days = Math.round(hours / 24);
-  return `${days} day${days === 1 ? "" : "s"} ago`;
-}
-
 /** Plain words for the run's current stage (the terminal has the detail). */
 function stageText(mining: MineState): string {
   if (mining.stage === "analyzing")
     return mining.found ? `Analyzing ${Math.min(mining.found, 100)} sessions…` : "Analyzing your sessions…";
-  if (mining.stage === "reviewing") return "Reading sessions & drafting skills…";
+  // Past the early stages the artifacts can't tell "drafting" from "report
+  // delivered, conversation open" — don't claim in-flight work indefinitely.
+  if (mining.stage === "reviewing") return "Session open — skills appear as they land";
   return "Scanning your sessions…";
 }
 
@@ -432,7 +424,9 @@ function MineCard({
   const actions =
     running && mining ? (
       <div className={`flex items-center gap-2 text-xs ${wide ? "min-w-0" : "mt-auto pt-1"}`}>
-        <Spinner className="h-3 w-3 shrink-0" />
+        {/* The spinner only while work is verifiably in flight; "reviewing"
+            covers the open-conversation steady state, which can last days. */}
+        {mining.stage !== "reviewing" && <Spinner className="h-3 w-3 shrink-0" />}
         <span className="min-w-0 flex-1 truncate text-muted">{stageText(mining)}</span>
         <button
           type="button"
@@ -452,7 +446,7 @@ function MineCard({
           }}
           className="shrink-0 font-medium text-faint hover:text-danger"
         >
-          Stop
+          Close
         </button>
       </div>
     ) : (
@@ -468,7 +462,7 @@ function MineCard({
             <PickaxeIcon />
             Mine
           </button>
-          {hasRun && mining.status === "done" ? (
+          {hasRun && (
             <button
               type="button"
               disabled={continuing}
@@ -482,13 +476,6 @@ function MineCard({
             >
               {continuing ? "Opening…" : "Continue the conversation"}
             </button>
-          ) : (
-            hasRun &&
-            mining.startedUnix != null && (
-              <span className="text-xs text-faint">
-                {mining.status === "stopped" ? "Last run stopped" : `Mined ${timeAgo(mining.startedUnix)}`}
-              </span>
-            )
           )}
       </div>
     );
@@ -603,9 +590,11 @@ export function Component() {
   // Bumped on every scan; a slower in-flight scan (or its background dirty fetch)
   // checks this before committing state so it can't clobber a newer scan's results.
   const discoveryEpoch = useRef(0);
-  const runDiscovery = useCallback(async () => {
+  // `silent` skips the header spinner — for automatic ticks; the epoch guard
+  // already arbitrates racing scans.
+  const runDiscovery = useCallback(async (opts?: { silent?: boolean }) => {
     const epoch = ++discoveryEpoch.current;
-    setDiscovering(true);
+    if (!opts?.silent) setDiscovering(true);
     try {
       const groups = await api.discoverSkills();
       if (epoch !== discoveryEpoch.current) return; // a newer scan superseded us
@@ -625,6 +614,8 @@ export function Component() {
     } catch {
       // Keep whatever was already found if a rescan fails.
     } finally {
+      // Unconditional: also clears a manual scan's spinner when a silent
+      // tick superseded it.
       if (epoch === discoveryEpoch.current) setDiscovering(false);
     }
   }, []);
@@ -632,13 +623,25 @@ export function Component() {
     void runDiscovery();
   }, [runDiscovery]);
 
-  // When a mining run finishes (or is stopped), rescan: newly staged proposals
-  // and freshly dirtied skills should appear without a manual refresh.
+  // When a mining run ends (TUI quit, terminal closed, or stopped), rescan:
+  // newly staged proposals and freshly dirtied skills should appear without a
+  // manual refresh.
   const prevMineStatus = useRef<string | null>(null);
   useEffect(() => {
     const status = mining?.status ?? null;
-    if (prevMineStatus.current === "running" && status !== "running") void runDiscovery();
+    if (prevMineStatus.current === "running" && status !== "running")
+      void runDiscovery({ silent: true });
     prevMineStatus.current = status;
+  }, [mining?.status, runDiscovery]);
+  // And rescan on a slow tick while one is live: the conversation stays open
+  // after the mining work lands (the run IS an interactive session), so
+  // proposals must surface without waiting for its terminal to close.
+  useEffect(() => {
+    if (mining?.status !== "running") return;
+    const t = setInterval(() => {
+      if (!document.hidden) void runDiscovery({ silent: true });
+    }, 15000);
+    return () => clearInterval(t);
   }, [mining?.status, runDiscovery]);
 
   // Reopen the run's conversation: the server returns its live terminal, or
@@ -656,10 +659,14 @@ export function Component() {
   const stopMining = useCallback(async () => {
     if (
       !(await confirm({
-        title: "Stop mining?",
-        body: "The agent session is interrupted. Anything already staged stays reviewable.",
-        confirmLabel: "Stop",
-        danger: true,
+        title: "Close the mining session?",
+        body:
+          "Closes the run's terminal. If the agent is still working it's interrupted; " +
+          "you can reopen the conversation with Continue, and anything staged stays reviewable.",
+        confirmLabel: "Close",
+        // Only an interruption is destructive — closing an open conversation
+        // after the work landed is routine.
+        danger: mining?.stage !== "reviewing",
       }))
     )
       return;
@@ -669,7 +676,7 @@ export function Component() {
       // The state poll will reconcile either way.
     }
     void refreshMining();
-  }, [confirm]);
+  }, [confirm, mining?.stage]);
 
   const acceptProposed = useCallback(
     async (root: string) => {
@@ -930,7 +937,17 @@ export function Component() {
         />
       )}
 
-      {mineOpen && <MineDialog onClose={() => setMineOpen(false)} onStarted={() => setMineOpen(false)} />}
+      {mineOpen && (
+        <MineDialog
+          onClose={() => setMineOpen(false)}
+          // Land the user in the run's terminal right away: they see where it
+          // runs and can answer any first-run trust dialog without hunting.
+          onStarted={(terminalId) => {
+            setMineOpen(false);
+            navigate(terminalsPath(terminalId));
+          }}
+        />
+      )}
 
       {openOpen && (
         <OpenSkillDialog

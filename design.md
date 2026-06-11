@@ -123,26 +123,31 @@ declaring the shared properties an integration needs:
 
 - **skills_dirs / reads_shared** — where the agent discovers skills (its own
   folders + the shared `~/.agents/skills` standard),
-- **trigger** — how to run it *programmatically*: a zero-interaction headless
-  command line (no trust dialog, no approval prompts) that narrates progress
-  to the pane, records its session id to `<run_dir>/session-id`, and creates
-  `<run_dir>/done` iff the run completed — the completion signal is
-  harness-written (claude: the stream-json `result` event via the bundled
-  renderer; codex: `exec`'s exit status), never entrusted to the prompt
-  (`prepare` drops helper files it needs, e.g. claude's stream-json renderer),
-- **resume** — how to reopen that recorded session as the interactive TUI
-  (this is what makes a finished run's conversation continuable even after
-  its terminal is gone).
+- **launch** — how to start it on a task: the *interactive TUI* command line
+  with the initial prompt pre-submitted (claude: the positional prompt;
+  codex/cursor: the positional prompt; gemini: `-i`). An app-driven run is an
+  ordinary agent session — same harness semantics, approval prompts, and
+  lifetime as if the user had typed the prompt — and the prompt the user
+  previewed is the *whole* prompt the agent receives. The caller must bring
+  the user to the run's terminal, where first-run trust dialogs and approvals
+  are answered. (Headless modes were dropped deliberately: they diverge from
+  a real session — claude's `-p` ends the run the moment the agent ends its
+  turn and kills its background tasks.)
+- **resume** — how to reopen the run dir's most recent conversation as the
+  TUI after its terminal is gone (claude: `--continue`; codex:
+  `resume --last`; gemini: `--resume` — all cwd/project-scoped, which is why
+  each run gets a stable directory).
 
-Features consume capabilities, not names: mining launches `trigger` and
-watches `<run_dir>/done`, "continue the conversation" revives the recorded
-session via `resume` on demand, terminal options carry a `canMine` flag
-(`agents::can_trigger`), and the UI degrades when a capability is `None` — a
-discovery-only agent (Cursor, Gemini CLI today) simply isn't offered for
-unattended runs. **Supporting a new agent = filling in one entry**;
-if its capability can't be expressed (no documented headless mode), leave it
-`None` rather than wiring an interactive command that can block on a prompt
-nobody will see.
+Features consume capabilities, not names: mining starts `launch` in a
+terminal and navigates the user there ("running" = that TUI is still up; no
+completion sentinel — results surface via the skills scan and git dirty
+tracking), "continue the conversation" revives the conversation via `resume`
+on demand, terminal options carry a `canMine` flag (`agents::can_launch`),
+and the UI degrades when a capability is `None` — an agent with no
+prompt-submitting TUI launch simply isn't offered for mining runs, and one
+without a cwd-scoped resume (Cursor) just can't revive a closed
+conversation. **Supporting a new agent = filling in one entry**; if a
+capability can't be expressed from documented behavior, leave it `None`.
 
 ## The connection manager (VS Code "Remote - SSH")
 

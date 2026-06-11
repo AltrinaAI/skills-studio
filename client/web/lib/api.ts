@@ -652,8 +652,8 @@ export interface AgentOption {
   version: string | null;
   /** Whether this agent supports `--ide` (attach to a running editor extension). */
   supportsIde: boolean;
-  /** Whether the server's agent registry can run this family unattended
-   *  (headless trigger + resumable session) — the gate for mining runs. */
+  /** Whether the server's agent registry can launch this family's TUI with an
+   *  initial prompt pre-submitted — the gate for mining runs. */
   canMine: boolean;
 }
 
@@ -684,7 +684,7 @@ export interface CreateTermArgs {
   resume?: boolean;
 }
 
-// --- skill mining (a skill-miner run in an agent terminal) ---
+// --- skill mining (a skill-miner run in an interactive agent terminal) ---
 
 /** A transcript source the miner can read, with its in-window session count. */
 export interface MineSource {
@@ -694,7 +694,8 @@ export interface MineSource {
 }
 
 export interface MineState {
-  /** "idle" (never ran) | "running" | "done" | "stopped". */
+  /** "idle" (never ran) | "running" (the run's TUI is up in its terminal) |
+   *  "ended" (the terminal or the agent in it is gone). */
   status: string;
   /** While running: "scanning" | "analyzing" | "reviewing". */
   stage?: string;

@@ -88,8 +88,9 @@ pub struct AgentOption {
     pub version: Option<String>,
     /// Whether this agent supports `--ide` (attach to a running editor extension).
     pub supports_ide: bool,
-    /// Whether the agent registry has a programmable (headless) trigger for
-    /// this family — the gate for unattended runs like skill mining.
+    /// Whether the agent registry has an interactive launch line (TUI with an
+    /// initial prompt) for this family — the gate for app-driven runs like
+    /// skill mining.
     pub can_mine: bool,
 }
 
@@ -322,7 +323,7 @@ fn gc_session_if_stale(id: &str, idle_secs: u64) -> bool {
 }
 
 /// True when the session's agent has exited and only shell prompts remain.
-/// Used by mining to tell "the headless run ended" apart from "still working"
+/// Used by mining to tell "the run's TUI is gone" apart from "still open"
 /// (the launch line ends in `; exec bash -l`, so the session itself lives on).
 pub fn agent_exited(id: &str) -> bool {
     all_panes_are_shells(id)
@@ -449,12 +450,13 @@ pub fn create_session(
     create_session_inner(&opt, cwd, cols, rows, agent_cmd)
 }
 
-/// Create a session that RESUMES the agent's recorded conversation in `cwd`:
-/// the agent registry's resume line reads `<cwd>/session-id` (with the
-/// agent's own fallback, e.g. codex re-deriving the id from its rollout
-/// files). The programmatic counterpart of `create_session` — exposed on the
-/// terminal API as a `resume` flag with deliberately no dialog UI; skill
-/// mining's "continue the conversation" is the caller today.
+/// Create a session that RESUMES the agent's most recent conversation in
+/// `cwd`: the agent registry's resume line is cwd-scoped (claude
+/// `--continue`, codex `resume --last`), so spawning it in the run dir
+/// reopens that run's conversation. The programmatic counterpart of
+/// `create_session` — exposed on the terminal API as a `resume` flag with
+/// deliberately no dialog UI; skill mining's "continue the conversation" is
+/// the caller today.
 pub fn create_session_resume(
     agent_id: &str,
     cwd: &str,
@@ -470,20 +472,14 @@ pub fn create_session_resume(
     let resume = skill_core::agents::by_family(&opt.agent)
         .and_then(|d| d.resume)
         .ok_or_else(|| format!("{} can't resume a recorded session yet.", opt.label))?;
-    let resolved = skill_core::pathsafe::resolve_root(cwd);
-    let cmd = resume(&skill_core::agents::ResumeCtx {
-        bin: &opt.bin,
-        run_dir: &resolved,
-        model,
-        effort,
-    });
+    let cmd = resume(&skill_core::agents::ResumeCtx { bin: &opt.bin, model, effort });
     create_session_inner(&opt, cwd, cols, rows, cmd)
 }
 
-/// Create a session whose agent command is a caller-built shell LINE — e.g. a
-/// pipeline like `claude -p … | python3 watch.py` (skill mining's headless run
-/// with a live renderer). The caller is responsible for quoting; the secrets
-/// env sourcing and the keep-alive shell wrapper still apply.
+/// Create a session whose agent command is a caller-built shell LINE — e.g.
+/// an agent TUI launched with an initial prompt (skill mining's run). The
+/// caller is responsible for quoting; the secrets env sourcing and the
+/// keep-alive shell wrapper still apply.
 pub fn create_session_cmd(
     agent_id: &str,
     cwd: &str,
@@ -1039,7 +1035,7 @@ fn compute_agents() -> Vec<AgentOption> {
                 version: bin_version(&bin),
                 bin,
                 supports_ide: spec.supports_ide,
-                can_mine: skill_core::agents::can_trigger(spec.agent),
+                can_mine: skill_core::agents::can_launch(spec.agent),
             });
         }
         for (editor, bin) in ext_finds(&spec) {
@@ -1052,7 +1048,7 @@ fn compute_agents() -> Vec<AgentOption> {
                 version: bin_version(&bin),
                 bin,
                 supports_ide: spec.supports_ide,
-                can_mine: skill_core::agents::can_trigger(spec.agent),
+                can_mine: skill_core::agents::can_launch(spec.agent),
             });
         }
     }

@@ -3,6 +3,13 @@
 // → the `generated-skills/` Proposed staging area; improvements → ordinary
 // uncommitted changes reviewed with the worktree diff).
 //
+// A run IS an ordinary interactive agent session: the registry's launch line
+// starts the agent's TUI in the run dir with the (user-previewed) prompt
+// pre-submitted, and the client navigates the user to that terminal — they
+// watch the run live, answer any first-run dialog, and follow up in place.
+// No headless mode, no hidden prompt text, no completion sentinel: what the
+// user sees in the dialog and the pane is exactly what the agent gets.
+//
 // The judgment work (cluster, judge, author) is the agent's, per the skill's
 // own instructions; this module owns the run lifecycle around it: refresh the
 // installed copy of the skill, snapshot which skills were already dirty (so
@@ -18,7 +25,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::agents::{self, TriggerCtx};
+use crate::agents::{self, LaunchCtx};
 use crate::sync::install_skill;
 use crate::{discover, gitops, secrets};
 
@@ -66,7 +73,8 @@ struct RunRecord {
     /// recorded terminal is trusted without probing (see [`continue_run`]).
     #[serde(default)]
     continued_unix: u64,
-    /// "running" | "done" | "stopped" — "done" / "stopped" are sticky.
+    /// "running" (the TUI is up in the recorded terminal) | "ended" (sticky:
+    /// the terminal or the agent in it is gone; revivals don't reopen it).
     status: String,
     /// Every personal skill at run start with its dirty flag: the fixed set we
     /// re-check to attribute in-place edits to the run (user WIP stays out).
@@ -76,7 +84,7 @@ struct RunRecord {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MineState {
-    /// "idle" (never ran / no record) | "running" | "done" | "stopped".
+    /// "idle" (never ran / no record) | "running" | "ended".
     pub status: String,
     /// While running: "scanning" | "analyzing" | "reviewing".
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -301,9 +309,9 @@ pub fn prepare_run(
     if load_run().map(|r| r.status == "running").unwrap_or(false) {
         return Err("A mining run is already in progress.".into());
     }
-    let agent = agents::by_family(agent_family)
-        .filter(|a| a.trigger.is_some())
-        .ok_or_else(|| format!("{agent_family} has no headless mode — mining needs an agent that can run unattended."))?;
+    if !agents::can_launch(agent_family) {
+        return Err(format!("{agent_family} can't run skill mining yet."));
+    }
     let home = dirs::home_dir().ok_or_else(|| "Cannot locate home directory.".to_string())?;
 
     ensure_installed_in(&home, bundled_miner)?;
@@ -316,10 +324,6 @@ pub fn prepare_run(
         std::fs::remove_dir_all(&rdir).map_err(|e| e.to_string())?;
     }
     std::fs::create_dir_all(rdir.join("out")).map_err(|e| e.to_string())?;
-    // Helper files the agent's trigger line needs (e.g. claude's stream-json renderer).
-    if let Some(prep) = agent.prepare {
-        prep(&rdir)?;
-    }
 
     let sources = default_sources(sources);
     let prompt = match prompt_override.map(str::trim).filter(|p| !p.is_empty()) {
@@ -352,30 +356,29 @@ fn compose_prompt(days: u64, improve: bool) -> String {
         lines.push("Do not edit any existing skill in place; only stage brand-new skills.".into());
     }
     // No report file: the skill's own report step is the final message (visible
-    // in the terminal, and the conversation stays resumable for follow-ups).
+    // in the terminal, where the conversation stays open for follow-ups).
     // No structured results either — staged proposals surface via the skills
-    // scan, in-place edits via git dirty tracking, and completion via the
-    // trigger's [`agents::DONE_FILE`] — the prompt carries no output contract.
+    // scan, in-place edits via git dirty tracking — the prompt carries no
+    // output contract.
     lines.join("\n")
 }
 
-/// The full shell line for a mining run: the agent's headless TRIGGER from
-/// the agent registry — zero-interaction, narrated live in the pane, session
-/// id recorded, [`agents::DONE_FILE`] written iff it completes. No resume is
-/// chained: continuing the conversation is [`continue_run`]'s job, on demand.
+/// The full shell line for a mining run: the agent's interactive TUI from the
+/// agent registry, launched with the run prompt pre-submitted — an ordinary
+/// agent session in the run dir's terminal, where the user watches, answers
+/// any first-run dialog, and follows up in place.
 ///
-/// None when the family has no headless trigger — the caller surfaces that
-/// as "this agent can't power mining runs".
+/// None when the family has no launch line — the caller surfaces that as
+/// "this agent can't power mining runs".
 pub fn launch_cmd(
     agent_family: &str,
     bin: &str,
-    run_dir: &Path,
     prompt: &str,
     model: Option<&str>,
     effort: Option<&str>,
 ) -> Option<String> {
     let def = agents::by_family(agent_family)?;
-    Some((def.trigger?)(&TriggerCtx { bin, run_dir, prompt, model, effort }))
+    Some((def.launch?)(&LaunchCtx { bin, prompt, model, effort }))
 }
 
 /// Persist the run record once the terminal is up.
@@ -411,11 +414,11 @@ pub fn record_run(
 const REVIVE_GRACE_SECS: u64 = 60;
 
 /// "Continue the conversation" target: the recorded terminal while the agent
-/// is still live in it (the headless run, or an earlier revival), else a
-/// fresh terminal reviving the recorded session — the trigger chains no
-/// resume, so a finished run's pane ends at a bare shell. That pane is left
-/// alone (its scrollback holds the run's report and any failure output; the
-/// terminal GC reaps it); the record just moves to the new terminal.
+/// is still live in it (the run's own TUI, or an earlier revival), else a
+/// fresh terminal reviving the run dir's conversation — for when the TUI was
+/// quit or its terminal closed. The dead pane is left alone (its scrollback
+/// holds the run's report and any failure output; the terminal GC reaps it);
+/// the record just moves to the new terminal.
 /// `spawn_resume` is the route layer's
 /// `create_session_resume(agent_id, cwd, model, effort)` — the terminal
 /// API's resume path, so the resume line is built in exactly one place.
@@ -447,11 +450,12 @@ pub fn continue_run(
 
 /// Current run state. The two probes are supplied by the route layer (it owns
 /// skill-term) and only consulted while the record still says "running":
-/// `session_exists` = the tmux session is listed; `agent_running` = its
-/// foreground command isn't back to a plain shell. Headless runs exit when
-/// done, so "agent gone but no done sentinel" means the run ended without
-/// completing — surfaced as "stopped". A startup grace period covers the
-/// moment the launch line is still spinning up under the pane's shell.
+/// `session_exists` = the tmux session is listed; `agent_running` = the pane
+/// isn't back to a plain shell. An interactive run has no completion
+/// sentinel — the agent reports in its pane and the conversation stays open —
+/// so "running" simply means the TUI is still up in the recorded terminal.
+/// A startup grace period covers the moment the launch line is still spinning
+/// up under the pane's shell.
 pub fn state(
     session_exists: impl Fn(&str) -> bool,
     agent_running: impl Fn(&str) -> bool,
@@ -481,16 +485,14 @@ fn state_inner(
     };
     let rdir = run_dir()?;
 
-    // The done sentinel is the completion signal and outranks liveness probes:
-    // it also recovers a record a flaky probe wrongly marked "stopped" while
-    // the agent was in fact still working.
-    if rdir.join(agents::DONE_FILE).exists() && (rec.status == "running" || rec.status == "stopped") {
-        rec.status = "done".into();
+    // Records from the retired headless pipeline used "done" / "stopped".
+    if rec.status == "done" || rec.status == "stopped" {
+        rec.status = "ended".into();
         let _ = save_run(&rec);
     } else if rec.status == "running" {
         let past_grace = now_unix().saturating_sub(rec.started_unix) > 60;
         if !session_exists(&rec.terminal_id) || (past_grace && !agent_running(&rec.terminal_id)) {
-            rec.status = "stopped".into();
+            rec.status = "ended".into();
             let _ = save_run(&rec);
         }
     }
@@ -510,15 +512,11 @@ fn state_inner(
     // check stays cheap because the candidate list is fixed at run start.
     let clean_at_start: Vec<String> =
         rec.candidates.iter().filter(|c| !c.dirty).map(|c| c.root.clone()).collect();
-    let improved: Vec<String> = if rec.status == "running" || rec.status == "done" {
-        gitops::git_dirty_many(&clean_at_start)
-            .into_iter()
-            .filter(|d| d.dirty)
-            .map(|d| d.root)
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let improved: Vec<String> = gitops::git_dirty_many(&clean_at_start)
+        .into_iter()
+        .filter(|d| d.dirty)
+        .map(|d| d.root)
+        .collect();
 
     Ok(MineState {
         status: rec.status.clone(),
@@ -585,7 +583,7 @@ pub fn stop(kill: impl Fn(&str) -> Result<(), String>) -> Result<(), String> {
     let Some(mut rec) = load_run() else { return Ok(()) };
     if rec.status == "running" {
         let _ = kill(&rec.terminal_id);
-        rec.status = "stopped".into();
+        rec.status = "ended".into();
         save_run(&rec)?;
     }
     Ok(())
@@ -596,37 +594,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn launch_cmd_uses_headless_modes() {
-        let rd = Path::new("/tmp/run");
-        // claude: print mode (skips the workspace-trust dialog by design),
-        // stream-json piped through the bundled live renderer, which also
-        // writes the done sentinel on a successful result event.
-        let c = launch_cmd("claude", "/bin/claude", rd, "do the thing", Some("opus"), Some("max"))
-            .expect("claude has a trigger");
-        assert!(c.starts_with("'/bin/claude' -p 'do the thing'"));
-        assert!(c.contains("--permission-mode auto"));
-        assert!(c.contains("--output-format stream-json"));
-        assert!(c.contains("--model 'opus'"));
-        assert!(c.contains("--effort 'max'"));
-        assert!(c.contains("| python3 -u '/tmp/run/watch.py' '/tmp/run/session-id' '/tmp/run/done'"));
+    fn launch_cmd_uses_interactive_tuis() {
+        // claude: the interactive TUI (no -p / stream-json), prompt as the
+        // positional initial message — FIRST, since the variadic --add-dir
+        // would swallow a trailing positional — and auto permission mode.
+        let c = launch_cmd("claude", "/bin/claude", "do the thing", Some("opus"), Some("max"))
+            .expect("claude has a launch line");
+        assert!(c.starts_with("'/bin/claude' 'do the thing' --permission-mode auto --model 'opus' --effort 'max'"));
+        assert!(!c.contains(" -p ") && !c.contains("--output-format"), "interactive, not print mode");
         // No chained resume: continuing the conversation is continue_run's job.
-        assert!(!c.contains("--resume"));
+        assert!(!c.contains("--resume") && !c.contains("--continue"));
         // model/effort omitted entirely when unset.
-        let c2 = launch_cmd("claude", "/bin/claude", rd, "p", None, None).unwrap();
+        let c2 = launch_cmd("claude", "/bin/claude", "p", None, None).unwrap();
         assert!(!c2.contains("--model") && !c2.contains("--effort"));
-        // codex: exec subcommand, approvals off, effort via -c; its exit
-        // status writes the done sentinel.
-        let x = launch_cmd("codex", "/bin/codex", rd, "do the thing", Some("gpt-5.5"), Some("xhigh"))
-            .expect("codex has a trigger");
-        assert!(x.starts_with("'/bin/codex' exec --skip-git-repo-check"));
-        assert!(x.contains("'approval_policy=\"never\"'"));
-        assert!(x.contains("-m 'gpt-5.5'"));
-        assert!(x.contains("'model_reasoning_effort=\"xhigh\"'"));
-        assert!(x.contains("'do the thing' </dev/null && touch '/tmp/run/done'"));
-        assert!(!x.contains("resume"));
-        // No headless trigger (discovery-only or unknown family) ⇒ no line.
-        assert!(launch_cmd("cursor", "/bin/c", rd, "p", None, None).is_none());
-        assert!(launch_cmd("shell", "/bin/bash", rd, "p", None, None).is_none());
+        // codex: the TUI (not the headless exec subcommand) with its native
+        // approval prompts — someone is watching the pane now.
+        let x = launch_cmd("codex", "/bin/codex", "do the thing", Some("gpt-5.5"), Some("xhigh"))
+            .expect("codex has a launch line");
+        assert!(x.starts_with("'/bin/codex' 'do the thing' -m 'gpt-5.5' -c 'model_reasoning_effort=\"xhigh\"'"));
+        assert!(!x.contains("exec") && !x.contains("approval_policy"));
+        // gemini submits via -i (a bare positional would run headless).
+        let g = launch_cmd("gemini", "/bin/gemini", "p", Some("pro"), None).unwrap();
+        assert_eq!(g, "'/bin/gemini' -m 'pro' -i 'p'");
+        // cursor: positional prompt, --model is the only tuning knob.
+        let u = launch_cmd("cursor", "/bin/cursor-agent", "p", Some("gpt-5.5"), None).unwrap();
+        assert_eq!(u, "'/bin/cursor-agent' 'p' --model 'gpt-5.5'");
+        // No launch line (or unknown family) ⇒ no run.
+        assert!(launch_cmd("openclaw", "/bin/o", "p", None, None).is_none());
+        assert!(launch_cmd("shell", "/bin/bash", "p", None, None).is_none());
     }
 
     #[test]

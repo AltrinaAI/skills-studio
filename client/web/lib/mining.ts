@@ -11,6 +11,7 @@ let fetching = false;
 const subscribers = new Set<() => void>();
 
 const RUNNING_POLL_MS = 2500;
+const REVIEWING_POLL_MS = 15000;
 
 function emit() {
   for (const fn of subscribers) fn();
@@ -22,7 +23,11 @@ function schedule() {
   // Only a live run changes state on its own; otherwise refreshes are
   // event-driven (start/stop/subscribe), so polling would be noise.
   if (subscribers.size > 0 && state?.status === "running") {
-    timer = setTimeout(() => void refreshMining(), RUNNING_POLL_MS);
+    // The early stages move fast; past them the run is an open conversation
+    // that can stay "running" for days — back off (each poll also costs a
+    // server-side git sweep over the candidate skills).
+    const ms = state.stage === "reviewing" ? REVIEWING_POLL_MS : RUNNING_POLL_MS;
+    timer = setTimeout(() => void refreshMining(), ms);
   }
 }
 
