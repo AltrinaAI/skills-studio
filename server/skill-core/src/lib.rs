@@ -14,5 +14,6 @@ pub mod process;
 pub mod remotesync;
 pub mod secrets;
 pub mod skill;
+pub mod switchboard;
 pub mod sync;
 pub mod update;

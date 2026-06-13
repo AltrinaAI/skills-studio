@@ -100,7 +100,12 @@ fn fake_available() -> Option<AvailableUpdate> {
 /// Store the installer control + the running version and start the background
 /// check loop. Called once by the server when an updater is configured;
 /// "0.0.0" (the committed dev placeholder) disables real checking entirely.
+/// No-op while [`switchboard::AUTO_UPDATE`](crate::switchboard::AUTO_UPDATE)
+/// is off: no control is registered, so the whole feature stays dormant.
 pub fn init(control: Arc<dyn UpdateControl>, current_version: &str) {
+    if !crate::switchboard::AUTO_UPDATE {
+        return;
+    }
     let _ = CONTROL.set(control);
     let _ = CURRENT.set(current_version.to_string());
     if std::env::var("SKILL_STUDIO_UPDATE_FAKE").is_ok() || current_version == "0.0.0" {
