@@ -100,15 +100,22 @@ impl Transport {
 }
 
 /// Build the `wsl.exe` invocation for `remote_cmd`. We base64-encode the script and run a
-/// tiny fixed wrapper that decodes it to a temp file and runs THAT — so the script body
-/// never passes through `wsl.exe`/Windows command-line quoting (the base64 alphabet has
-/// no quotes, spaces, or glob chars), and the decoded script runs with the PROCESS stdin
-/// intact: a `--lifeline-stdin` server (or a `cat >` pipe install) inherits our held
-/// stdin rather than the decode pipe. `bash -l` gives a login shell so `curl`/`wget` are
-/// on PATH, mirroring how ssh runs the user's login shell.
+/// tiny fixed wrapper that decodes it and runs THAT — so the script body never passes
+/// through `wsl.exe`/Windows command-line quoting (the base64 alphabet has no quotes,
+/// spaces, or glob chars).
+///
+/// The wrapper ITSELF must also be quoting-proof, because `wsl.exe` runs our
+/// `bash -lc "<wrapper>"` through an extra interop shell that parses the double-quoted
+/// arg first — so any `$`/backtick in the wrapper gets expanded a round too early (a
+/// `$(mktemp)`/`$f` wrapper arrived at our bash as `f=…;…|base64 -d>;bash ` — the temp
+/// var eaten — and died on the dangling `>`). Process substitution avoids every `$`: it
+/// runs the decoded script with the PROCESS stdin intact (a `--lifeline-stdin` server, or
+/// a `cat >` pipe install, inherits our held stdin — `bash` reads the script from
+/// `/dev/fd`, not stdin) using only chars that survive a double-quote pass untouched.
+/// `bash -l` gives a login shell so `curl`/`wget` are on PATH, mirroring ssh.
 fn wsl_command(distro: &str, remote_cmd: &str) -> Command {
     let b64 = base64(remote_cmd.as_bytes());
-    let wrapper = format!("f=$(mktemp);echo {b64}|base64 -d>$f;bash $f");
+    let wrapper = format!("bash <(echo {b64}|base64 -d)");
     let mut c = Command::new("wsl.exe");
     c.arg("-d").arg(distro).arg("--").arg("bash").arg("-lc").arg(wrapper);
     c
@@ -326,5 +333,28 @@ fn hint(t: &Transport, stderr: &str) -> String {
         format!("connecting to {host} failed")
     } else {
         format!("{host}: {s}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The `wsl.exe` wrapper is parsed by an extra interop shell before our `bash -lc`
+    // sees it, so it must contain NO char that an outer double-quote pass would touch
+    // (`$`, backtick, backslash, `"`) — otherwise `$(…)`/`$var` expand a round early and
+    // the command arrives mangled (the original `$(mktemp)`/`$f` bug).
+    #[test]
+    fn wsl_wrapper_survives_an_outer_quote_pass() {
+        let c = wsl_command("Ubuntu", "uname -sm");
+        let wrapper = c.get_args().last().unwrap().to_string_lossy().into_owned();
+        for bad in ['$', '`', '\\', '"'] {
+            assert!(!wrapper.contains(bad), "wrapper must not contain {bad:?}: {wrapper}");
+        }
+        // Still decodes the script and runs it with stdin intact (process substitution,
+        // not a stdin pipe), and the body is carried as opaque base64.
+        assert!(wrapper.contains("base64 -d"), "decodes the payload: {wrapper}");
+        assert!(wrapper.contains("bash <("), "runs via process substitution: {wrapper}");
+        assert!(wrapper.contains(&base64(b"uname -sm")), "carries the b64 body: {wrapper}");
     }
 }
