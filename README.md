@@ -20,29 +20,24 @@ box you drive from a browser (the VS Code-remote model — see [`design.md`](./d
 - **Discover** every skill on your machine — across Claude Code, Codex, Cursor,
   Gemini CLI, OpenClaw, the shared `~/.agents/skills` standard, and project repos
   — classified personal / official / plugin.
-- **Skill Mining** *(new — ready to use)* — a local agent that reads your past
-  agent conversations to surface the skills that would have helped, then drafts
-  new ones or improves the skills you already have. It runs as an interactive
-  session right in the app — watch it work and keep what's useful. Kick it off
-  from the **Skill Mining** card on the home screen.
-- **A Notion-like UI/UX for your agent skills** — `SKILL.md` rendered as a clean
-  document with frontmatter badges, a GFM body, and a full file-tree browser;
-  double-click to toggle render/edit, with a frontmatter form, CodeMirror body
-  editor, live preview, and autosave scoped to the folder.
+- **Skill Mining** — use a local agent to analyze your past agent
+  conversations and create / update skills.
+- **Rendered Markdown editing** — `SKILL.md` and other Markdown files rendered
+  as a clean, Notion-like document with frontmatter badges, a GFM body, and a
+  full file-tree browser.
 - **Automatic versioning** — a VS Code-style Source Control panel per skill:
   working-tree changes, inline diffs, discard, and numbered commit history,
   parent-repo aware. Commit messages are drafted locally by the on-device 2B
   Qwen model — nothing leaves the machine.
 - **Secrets manager** — one machine-local store. Terminals launched from the
-  app inject the secrets into the agent's environment automatically; skills
-  declare what they need (`metadata.required-env`, auto-detected on save) so
-  exports can offer to bundle them and imports can show what's missing. The
-  bundled `load-secrets` activation skill covers agents started elsewhere.
+  app inject the secrets into the agent's environment automatically. Secrets in
+  use are auto-detected and can be bundled on skill export, for
+  "batteries-included" skill sharing within a team.
 - **Terminals & remote hosts** — run Claude Code, Codex, or a shell in
   tmux-backed sessions that survive UI disconnect, so you can close your laptop
   and pick the run back up later. Point Studio at an SSH host or a local WSL
-  distro and it provisions a matching `skill-server` there, so you edit and run
-  skills on that machine as if it were local (the VS Code-remote model).
+  distro to edit and run skills on that machine as if it were local (the VS
+  Code-remote model).
 
 ## Run it
 
@@ -71,12 +66,3 @@ first-class human UX. Next:
 1. **Version-controlled team collaboration & team secret managers** — share
    skills and the secrets they need across a team, account-backed.
 2. **Multi-modal skills / SOP documents** in a readable format.
-
-Skill Mining shipped — see Features above.
-
-## Notes
-
-- Reads/writes are constrained to the loaded skill folder (no `..` escapes); run
-  it on folders you trust. Markdown renders without raw-HTML passthrough.
-- The desktop CSP is `default-src 'self'`; any outbound network originates in
-  Rust, never the webview — so a skill's diff is never sent anywhere.
