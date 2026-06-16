@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { Spinner, btnGhost, btnPrimary } from "@/components/ui";
 import NavBar from "@/components/NavBar";
 import { Modal } from "@/components/Modal";
@@ -59,11 +60,12 @@ function RefreshIcon({ className = "" }: { className?: string }) {
 const gridCls = "grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4";
 const cardCls =
   "group flex flex-col gap-1.5 rounded-xl border border-border bg-surface p-3.5 text-left transition-colors hover:border-border-strong hover:bg-panel";
-// Proposed cards carry their own action buttons, so they're a static container
-// (not a button) and wear a faint green-tinted border to stand apart inside the
-// Discovered grid they share with ordinary skills.
+// Proposed cards wear a green-tinted border to stand apart in the grid. The card
+// body opens the skill (same click-to-open as a normal card), but Accept /
+// Discard live below as their own buttons — so the root stays a container, not a
+// single button. Mirrors the SkillCard look (h-full, hover) so they sit flush.
 const proposedCardCls =
-  "flex flex-col gap-1.5 rounded-xl border border-[color-mix(in_srgb,var(--ok)_40%,transparent)] bg-surface p-3.5 text-left";
+  "group flex h-full flex-col gap-1.5 rounded-xl border border-[color-mix(in_srgb,var(--ok)_40%,transparent)] bg-surface p-3.5 text-left transition-colors hover:border-[color-mix(in_srgb,var(--ok)_60%,transparent)] hover:bg-panel";
 const pillCls = "shrink-0 rounded-full px-1.5 py-0.5 text-[0.6rem] font-medium uppercase tracking-wide";
 
 function CheckIcon() {
@@ -135,11 +137,8 @@ function SkillCard({
   const tag = KIND_TAG[kindMeta(skill.kind).kind];
   return (
     <div className="group relative h-full">
-      {/* h-full + w-full: a <button> shrink-wraps its content (unlike a div), so
-          inside this wrapper it must be told to fill the grid cell — w-full or it
-          overflows the column, h-full so sibling cards stay equal-height and the
-          delete control anchors to the real card bottom (not floating in dead
-          space below a short card). */}
+      {/* w-full so the shrink-wrapping <button> fills the column; h-full keeps
+          sibling cards equal-height with the delete control at the real bottom. */}
       <button type="button" onClick={() => onOpen(skill.root)} className={`${cardCls} h-full w-full`}>
         <div className="flex items-center gap-2">
           <FolderIcon open={false} name={name} />
@@ -325,23 +324,18 @@ function ProposedCard({
   const name = skill.name ?? baseName(skill.root);
   return (
     <div className={proposedCardCls}>
+      {/* Card body opens the skill — where the path/dir is visible — so the path
+          is dropped from the card face. The bottom slot that ordinary cards use
+          for the path holds Accept / Discard here, keeping both the same height. */}
+      <button type="button" onClick={() => onOpen(skill.root)} className="flex flex-1 flex-col gap-1.5 text-left">
+        <div className="flex items-center gap-2">
+          <FolderIcon open={false} name={name} />
+          <span className="min-w-0 flex-1 truncate text-sm font-semibold text-fg">{name}</span>
+          <ProposedTag />
+        </div>
+        {skill.description && <p className="line-clamp-2 text-xs leading-relaxed text-muted">{skill.description}</p>}
+      </button>
       <div className="flex items-center gap-2">
-        <FolderIcon open={false} name={name} />
-        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-fg">{name}</span>
-        <ProposedTag />
-      </div>
-      {skill.description && <p className="line-clamp-2 text-xs leading-relaxed text-muted">{skill.description}</p>}
-      <span className="truncate pt-0.5 font-mono text-[0.7rem] text-faint" title={skill.root}>
-        {skill.root}
-      </span>
-      <div className="mt-1.5 flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => onOpen(skill.root)}
-          className="rounded-md border border-border px-2.5 py-1 text-xs font-medium text-fg hover:bg-panel"
-        >
-          Open
-        </button>
         <button
           type="button"
           disabled={busy}
@@ -391,11 +385,8 @@ function stageText(mining: MineState): string {
 // leads the page). Carries the start button, the live run status (Watch/Stop),
 // the last-run line, the after-run conversation link, and the run's edits to
 // existing skills. Proposed NEW skills land inline in the Discovered grid.
-// `wide` is the no-recents variant: a slim full-width banner (description left,
-// actions right) instead of a column card.
 function MineCard({
   mining,
-  wide = false,
   onMine,
   onStop,
   onWatch,
@@ -403,7 +394,6 @@ function MineCard({
   onDetails,
 }: {
   mining: MineState | null;
-  wide?: boolean;
   onMine: () => void;
   onStop: () => void;
   onWatch: () => void;
@@ -420,7 +410,7 @@ function MineCard({
   // bubble so its own action doesn't also navigate.
   const actions =
     running && mining ? (
-      <div className={`flex items-center gap-2 text-xs ${wide ? "min-w-0" : "mt-auto pt-1"}`}>
+      <div className="mt-auto flex items-center gap-2 pt-1 text-xs">
         {/* The spinner only while work is verifiably in flight; "reviewing"
             covers the open-conversation steady state, which can last days. */}
         {mining.stage !== "reviewing" && <Spinner className="h-3 w-3 shrink-0" />}
@@ -447,14 +437,14 @@ function MineCard({
         </button>
       </div>
     ) : (
-      <div className={`flex flex-wrap items-center gap-x-2.5 gap-y-1 ${wide ? "" : "mt-auto pt-1"}`}>
+      <div className="mt-auto flex flex-wrap items-center gap-x-2.5 gap-y-1 pt-1">
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
               onMine();
             }}
-            className={`${btnPrimary} inline-flex items-center gap-1.5`}
+            className="inline-flex items-center gap-1.5 rounded-md border border-accent/40 px-3 py-1.5 text-sm font-medium text-accent transition-colors hover:bg-accent-soft"
           >
             <PickaxeIcon />
             Mine
@@ -480,19 +470,10 @@ function MineCard({
     <section
       onClick={onDetails}
       title="Mining details — the latest run and its files"
-      className="flex flex-1 cursor-pointer flex-col gap-1 rounded-xl border border-[color-mix(in_srgb,var(--info)_35%,transparent)] bg-surface p-3 transition-colors hover:border-[color-mix(in_srgb,var(--info)_60%,transparent)] hover:bg-panel"
+      className="flex flex-1 cursor-pointer flex-col gap-1 rounded-xl border border-border bg-surface p-3.5 transition-colors hover:border-border-strong hover:bg-panel"
     >
-      {wide ? (
-        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1.5">
-          {description}
-          {actions}
-        </div>
-      ) : (
-        <>
-          {description}
-          {actions}
-        </>
-      )}
+      {description}
+      {actions}
     </section>
   );
 }
@@ -542,6 +523,128 @@ function OpenSkillDialog({
         </div>
       </form>
     </Modal>
+  );
+}
+
+function OpenIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
+    </svg>
+  );
+}
+
+/** The page's primary section title — the big, bold tier reserved for the main
+ *  section ("Your skills"). Recent, mining and Examples wear the quiet small-caps
+ *  AsideLabel so they read as secondary utilities, not peers. */
+function SectionTitle({ children, trailing }: { children: ReactNode; trailing?: ReactNode }) {
+  return (
+    <div className="mb-3 flex items-center gap-2.5">
+      <h2 className="text-lg font-semibold tracking-tight text-fg">{children}</h2>
+      {trailing}
+    </div>
+  );
+}
+
+/** Quiet small-caps label for secondary regions (the mining aside, Examples). */
+function AsideLabel({ children }: { children: ReactNode }) {
+  return <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-faint">{children}</h2>;
+}
+
+// A recent item — a compact card in a single slim row up top. It's a quick
+// shortcut back into work, not the page's focus (that's "Your skills" below), so
+// it stays small.
+function RecentCard({ r, onOpen, onRemove }: { r: Recent; onOpen: () => void; onRemove: () => void }) {
+  return (
+    <div className="group relative h-full">
+      <button
+        type="button"
+        onClick={onOpen}
+        className="flex h-full w-full flex-col gap-1 rounded-xl border border-border bg-surface p-3 pr-8 text-left transition-colors hover:border-border-strong hover:bg-panel"
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          {/* Folder vs file icon, as in the gallery — a loose markdown file reads
+              differently from a skill folder at a glance. */}
+          {r.kind === "markdown" ? <FileIcon name={r.name} /> : <FolderIcon open={false} name={r.name} />}
+          <span className="truncate text-sm font-semibold text-fg">{r.name}</span>
+        </span>
+        <span className="truncate font-mono text-[0.7rem] text-faint" title={r.root}>
+          {r.root}
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={`Remove ${r.name} from recents`}
+        className="absolute right-2 top-2 rounded p-1 text-faint opacity-0 hover:text-danger group-hover:opacity-100"
+      >
+        ✕
+      </button>
+    </div>
+  );
+}
+
+// First-run / no-history hero: when there's nothing to "jump back into", the
+// top-left can't sit empty (or mining becomes the de-facto hero). These are the
+// real entry points — New leads as the single filled primary; a pointer to the
+// gallery below covers the "I already have skills" case.
+function StartPanel({
+  onNew,
+  onOpen,
+  onImport,
+  count,
+}: {
+  onNew: () => void;
+  onOpen: () => void;
+  onImport: () => void;
+  count: number;
+}) {
+  const tileCls =
+    "flex flex-col gap-1.5 rounded-xl border p-4 text-left transition-colors";
+  return (
+    <div>
+      <AsideLabel>Get started</AsideLabel>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <button
+          type="button"
+          onClick={onNew}
+          className={`${tileCls} border-transparent bg-accent text-accent-fg hover:bg-accent-strong`}
+        >
+          <span className="flex items-center gap-2 font-semibold">
+            <PlusIcon />
+            New skill
+          </span>
+          <span className="text-xs text-accent-fg/80">Start from a template</span>
+        </button>
+        <button
+          type="button"
+          onClick={onOpen}
+          className={`${tileCls} border-border bg-surface hover:border-border-strong hover:bg-panel`}
+        >
+          <span className="flex items-center gap-2 font-semibold text-fg">
+            <OpenIcon />
+            Open a skill
+          </span>
+          <span className="text-xs text-muted">From a folder or path</span>
+        </button>
+        <button
+          type="button"
+          onClick={onImport}
+          className={`${tileCls} border-border bg-surface hover:border-border-strong hover:bg-panel`}
+        >
+          <span className="flex items-center gap-2 font-semibold text-fg">
+            <ImportIcon />
+            Import
+          </span>
+          <span className="text-xs text-muted">From a folder or .zip</span>
+        </button>
+      </div>
+      {count > 0 && (
+        <p className="mt-3 text-xs text-muted">
+          …or pick from your <span className="font-medium text-fg">{count}</span> skills below.
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -762,80 +865,70 @@ export function Component() {
       </NavBar>
 
       <main className="mx-auto w-full max-w-7xl flex-1 px-6 pb-24 pt-10">
-        {/* Content leads: recents (and the skills grid below) are where users
-            start. Mining is a compact side card; without recents (first run)
-            it widens into a slim full-width banner instead. */}
-        <div className="grid gap-3 lg:grid-cols-3">
-          {recents.length > 0 && (
-            <section className="flex flex-col lg:col-span-2">
-              <h2 className="mb-2 text-xs font-medium uppercase tracking-wider text-faint">Recent</h2>
-              <div className="grid flex-1 grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {/* Always one slim row beside the mining card: 1 card on mobile,
-                    2 from sm, 3 from lg (where the third column appears). */}
-                {recents.slice(0, 3).map((r, i) => (
-                  <div
-                    key={r.root}
-                    className={`group relative h-full ${i === 1 ? "hidden sm:block" : ""} ${i === 2 ? "hidden lg:block" : ""}`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => openRecent(r)}
-                      className="flex h-full w-full flex-col gap-1 rounded-xl border border-border bg-surface p-3 pr-8 text-left transition-colors hover:border-border-strong hover:bg-panel"
-                    >
-                      <span className="flex min-w-0 items-center gap-2">
-                        {/* Same icons as the cards below, so a loose markdown file
-                            reads differently from a skill folder at a glance. */}
-                        {r.kind === "markdown" ? <FileIcon name={r.name} /> : <FolderIcon open={false} name={r.name} />}
-                        <span className="truncate text-sm font-semibold text-fg">{r.name}</span>
-                      </span>
-                      <span className="truncate font-mono text-[0.7rem] text-faint" title={r.root}>
-                        {r.root}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removeRecent(r.root)}
-                      aria-label={`Remove ${r.name} from recents`}
-                      className="absolute right-2 top-2 rounded p-1 text-faint opacity-0 hover:text-danger group-hover:opacity-100"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-          <section className={`flex flex-col ${recents.length > 0 ? "" : "lg:col-span-3"}`}>
-            <h2 className="mb-2 text-xs font-medium uppercase tracking-wider text-faint">Skill Mining</h2>
+        {/* Slim utility strip above the main gallery: a quick path back into
+            recent work (or a Start panel on first run) on the left, the mining
+            aside on the right. Both stay compact and quiet — "Your skills" below
+            is the page's main section. */}
+        <section className="grid gap-3 lg:grid-cols-3">
+          <div className="flex flex-col lg:col-span-2">
+            {recents.length > 0 ? (
+              <>
+                <AsideLabel>Recent</AsideLabel>
+                {/* flex-1 + auto-rows-fr: the row fills the column so the cards
+                    stretch to the same height as the mining card beside them. */}
+                <div className="grid flex-1 auto-rows-fr grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {recents.slice(0, 3).map((r) => (
+                    <RecentCard
+                      key={r.root}
+                      r={r}
+                      onOpen={() => openRecent(r)}
+                      onRemove={() => removeRecent(r.root)}
+                    />
+                  ))}
+                </div>
+              </>
+            ) : (
+              <StartPanel
+                onNew={() => setNewOpen(true)}
+                onOpen={() => setOpenOpen(true)}
+                onImport={() => setImportOpen(true)}
+                count={totalFound}
+              />
+            )}
+          </div>
+          <div className="flex flex-col lg:col-span-1">
+            <AsideLabel>Skill Mining</AsideLabel>
             <MineCard
               mining={mining}
-              wide={recents.length === 0}
               onMine={() => setMineOpen(true)}
               onStop={() => void stopMining()}
               onWatch={() => navigate(terminalsPath(mining?.terminalId))}
               onContinue={continueMining}
               onDetails={() => navigate(miningPath())}
             />
-          </section>
-        </div>
+          </div>
+        </section>
 
         <section className="mt-12">
-          <div className="mb-2 flex items-center gap-2">
-            <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted">
-              Your skills
-              {discovering ? <Spinner className="h-3 w-3" /> : <span className="text-faint">· {totalFound}</span>}
-            </h2>
-            <button
-              type="button"
-              onClick={() => void runDiscovery()}
-              disabled={discovering}
-              title="Rescan your machine for installed skills"
-              className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted hover:bg-panel hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <RefreshIcon className={discovering ? "animate-spin" : ""} />
-              Discover
-            </button>
-          </div>
+          <SectionTitle
+            trailing={
+              <>
+                {discovering ? <Spinner className="h-3 w-3" /> : <span className="text-sm text-faint">{totalFound}</span>}
+                <button
+                  type="button"
+                  onClick={() => void runDiscovery()}
+                  disabled={discovering}
+                  title="Rescan your machine for installed skills"
+                  className="ml-auto flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted hover:bg-panel hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <RefreshIcon className={discovering ? "animate-spin" : ""} />
+                  Discover
+                </button>
+              </>
+            }
+          >
+            Your skills
+          </SectionTitle>
           {actionError && <p className="mb-3 text-sm text-danger">{actionError}</p>}
           {!discovering && totalFound === 0 ? (
             <p className="max-w-2xl text-sm text-muted">
@@ -865,7 +958,7 @@ export function Component() {
         </section>
 
         <section className="mt-12">
-          <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Examples</h2>
+          <AsideLabel>Examples</AsideLabel>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {EXAMPLES.map((ex) => (
               <button key={ex.path} type="button" onClick={() => onOpen(ex.path)} className={cardCls}>
