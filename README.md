@@ -1,6 +1,6 @@
 # Skill Studio
 
-The best editor for **[Agent Skills](https://agentskills.io/home)**. 
+The best human interface for **[Agent Skills](https://agentskills.io/home)**. 
 
 ![Skill Studio — recent skills, skill mining, and the discovered skills library](./Screenshot.png)
 
