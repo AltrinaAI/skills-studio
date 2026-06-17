@@ -29,9 +29,20 @@ Built with [Tauri](https://tauri.app/), Skill Studio runs on macOS, Linux, and W
 | **Windows** | [Download](https://github.com/AltrinaAI/skill-studio/releases/latest/download/Skill-Studio-Windows-x64-setup.exe) |
 | **Linux** — Debian/Ubuntu | [Download](https://github.com/AltrinaAI/skill-studio/releases/latest/download/Skill-Studio-Linux-x86_64.deb) |
 
-Prefer to build from source? See **Run it** below.
+## Build from source
 
-## Run it
+Install Rust, Node.js/npm, and the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for your OS, then:
+
+```bash
+git clone https://github.com/AltrinaAI/skill-studio.git
+cd skill-studio
+npm install
+npm run tauri -- build
+```
+
+The built app bundle is written under `client/desktop/target/release/bundle/`.
+
+## Development
 
 ```bash
 npm install
