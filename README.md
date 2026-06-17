@@ -1,6 +1,6 @@
 # Skill Studio
 
-The best human interface for **[Agent Skills](https://agentskills.io/home)**. 
+The best human interface for **[Agent Skills](https://agentskills.io/home)**. Available on macOS, Linux, and Windows.
 
 ![Skill Studio — recent skills, skill mining, and the discovered skills library](./Screenshot.png)
 
