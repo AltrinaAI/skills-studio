@@ -26,8 +26,7 @@ Grab the latest build for your platform:
 
 | Platform | |
 |----------|--|
-| **macOS** — Apple silicon | [Download](https://github.com/AltrinaAI/skill-studio/releases/latest/download/Skill-Studio-macOS-AppleSilicon.dmg) |
-| **macOS** — Intel | [Download](https://github.com/AltrinaAI/skill-studio/releases/latest/download/Skill-Studio-macOS-Intel.dmg) |
+| **macOS** — Apple silicon & Intel | [Download](https://github.com/AltrinaAI/skill-studio/releases/latest/download/Skill-Studio-macOS.dmg) |
 | **Windows** | [Download](https://github.com/AltrinaAI/skill-studio/releases/latest/download/Skill-Studio-Windows-x64-setup.exe) |
 | **Linux** — Debian/Ubuntu | [Download](https://github.com/AltrinaAI/skill-studio/releases/latest/download/Skill-Studio-Linux-x86_64.deb) |
 

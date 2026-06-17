@@ -15,8 +15,7 @@ jobs:
       matrix:
         include:
           - platform: ubuntu-22.04 # webkit2gtk-4.1 + glibc friendly for AppImage
-          - platform: macos-latest # Apple silicon
-          - platform: macos-15-intel # Intel (macos-13 retired Dec 2025; this is the last Intel image, retiring Fall 2027)
+          - platform: macos-latest # Apple silicon — builds one universal (arm64+x86_64) bundle
           - platform: windows-latest
     runs-on: ${{ matrix.platform }}
     steps:
@@ -40,7 +39,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-15-intel' && 'x86_64-apple-darwin' || '' }}
+          targets: ${{ startsWith(matrix.platform, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - uses: swatinem/rust-cache@v2
         with:
@@ -129,6 +128,9 @@ jobs:
           includeUpdaterJson: true
           retryAttempts: 3
           # Per-platform args (&& / || precedence: each `A && B` resolves before the `||`s):
+          #  • macOS → `--target universal-apple-darwin`: one universal (arm64+x86_64) .dmg
+          #    built on the fast Apple-Silicon runner; the slow macos-15-intel leg is gone
+          #    (it took ~3x as long for identical output).
           #  • Linux → `--bundles deb`: ship only the .deb and SKIP AppImage. Tauri's
           #    AppImage bundler (linuxdeploy) is currently flaky on GitHub runners — it
           #    fails even with APPIMAGE_EXTRACT_AND_RUN=1 (upstream tauri#14796, open) —
@@ -139,7 +141,7 @@ jobs:
           #    (signCommand was removed from tauri.conf.json; --no-sign was dropped
           #    because it also suppressed the updater .sig files). Re-enable
           #    Authenticode by restoring signCommand + the cert secrets.
-          args: ${{ matrix.platform == 'macos-15-intel' && '--target x86_64-apple-darwin' || startsWith(matrix.platform, 'ubuntu') && '--bundles deb' || '' }}
+          args: ${{ startsWith(matrix.platform, 'macos') && '--target universal-apple-darwin' || startsWith(matrix.platform, 'ubuntu') && '--bundles deb' || '' }}
 
       - name: Upload desktop bundles
         if: ${{ always() && github.event_name == 'workflow_dispatch' }}
@@ -150,14 +152,11 @@ jobs:
           retention-days: 14
           path: |
             client/desktop/target/release/bundle/deb/*.deb
-            client/desktop/target/release/bundle/dmg/*.dmg
-            client/desktop/target/release/bundle/macos/*.app
-            client/desktop/target/release/bundle/macos/*.app.tar.gz
             client/desktop/target/release/bundle/nsis/*.exe
             client/desktop/target/release/bundle/nsis/*.msi
-            client/desktop/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
-            client/desktop/target/x86_64-apple-darwin/release/bundle/macos/*.app
-            client/desktop/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz
+            client/desktop/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            client/desktop/target/universal-apple-darwin/release/bundle/macos/*.app
+            client/desktop/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz
 
   # Standalone `skill-server` binaries for the Remote-SSH feature. The desktop app
   # provisions one onto a remote host on demand (VS Code-style: the remote curls it,
