@@ -407,46 +407,61 @@ function PickaxeIcon({ className = "", size = 13 }: { className?: string; size?:
   );
 }
 
-// Mining's door: a compact side card to start a run or reopen the last one. It
-// deliberately shows NO progress/status — a run is an interactive session that
-// stays open after the work lands, so the app can't reliably tell "still running"
-// from "done". Rather than guess (and usually guess wrong), the card just points
-// at the last session. Proposed NEW skills land inline in the Discovered grid.
-function MineCard({
+// Mining's tile — a peer of New/Open/Import wearing the filled-accent highlight
+// as the row's primary, since mining (not hand-authoring) is how skills get
+// made. Click = open the launch sheet. No progress/status: a run is an
+// interactive session that stays open after the work lands, so once one exists
+// the tile just offers a quiet shortcut back to it. New skills land in the grid below.
+function MineTile({
   mining,
   onMine,
   onContinue,
   onDetails,
+  highlight = true,
+  className = "",
 }: {
   mining: MineState | null;
   onMine: () => void;
   onContinue: () => Promise<void>;
   onDetails: () => void;
+  /** Filled-accent only as a new user's primary on-ramp; with recent work to
+   *  resume it fades to the same outline style as the cards around it. */
+  highlight?: boolean;
+  className?: string;
 }) {
   const hasRun = mining != null && mining.status !== "idle";
   const [continuing, setContinuing] = useState(false);
+  const shell = highlight
+    ? "border-transparent bg-accent text-accent-fg hover:bg-accent-strong"
+    : "border-border bg-surface hover:border-border-strong hover:bg-panel";
+  const linkCls = highlight
+    ? "text-accent-fg/85 hover:text-accent-fg disabled:opacity-60"
+    : "text-accent hover:opacity-80 disabled:opacity-50";
   return (
-    <section
-      onClick={onDetails}
-      title="Mining details — the latest run and its files"
-      className="flex flex-1 cursor-pointer flex-col gap-1 rounded-xl border border-border bg-surface p-3.5 transition-colors hover:border-border-strong hover:bg-panel"
+    <div
+      onClick={onMine}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onMine();
+        }
+      }}
+      title="Mine your past conversations to create or update skills"
+      className={`group flex cursor-pointer flex-col gap-1.5 rounded-xl border p-4 text-left transition-colors ${shell} ${className}`}
     >
-      <p className="text-xs leading-relaxed text-muted">Analyze your past conversations to create / update skills</p>
-      {/* The whole card opens the mining page; inner controls stop the bubble so
-          their own action doesn't also navigate. */}
-      <div className="mt-auto flex flex-wrap items-center gap-x-2.5 gap-y-1 pt-1">
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onMine();
-          }}
-          className="inline-flex items-center gap-1.5 rounded-md border border-accent/40 px-3 py-1.5 text-sm font-medium text-accent transition-colors hover:bg-accent-soft"
-        >
-          <PickaxeIcon />
-          Mine
-        </button>
-        {hasRun && (
+      <span className={`flex items-center gap-2 font-semibold ${highlight ? "" : "text-fg"}`}>
+        <PickaxeIcon size={15} />
+        Mine your conversations
+      </span>
+      <span className={`text-xs ${highlight ? "text-accent-fg/80" : "text-muted"}`}>
+        Create &amp; update skills from your past sessions
+      </span>
+      {/* Once a run exists, quiet shortcuts back to it — inner buttons stop the
+          bubble so they don't also fire the tile's "start a run" click. */}
+      {hasRun && (
+        <div className="mt-auto flex flex-wrap items-center gap-x-3 gap-y-1 pt-1.5 text-xs font-medium">
           <button
             type="button"
             disabled={continuing}
@@ -456,13 +471,24 @@ function MineCard({
               void onContinue().finally(() => setContinuing(false));
             }}
             title="Reopens your last mining session — revived in a fresh terminal if it was closed"
-            className="text-xs font-medium text-accent hover:opacity-80 disabled:opacity-50"
+            className={linkCls}
           >
             {continuing ? "Opening…" : "Open last session"}
           </button>
-        )}
-      </div>
-    </section>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDetails();
+            }}
+            title="Mining details — the latest run and its files"
+            className={linkCls}
+          >
+            Details
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -572,54 +598,51 @@ function RecentCard({ r, onOpen, onRemove }: { r: Recent; onOpen: () => void; on
   );
 }
 
-// First-run / no-history hero: when there's nothing to "jump back into", the
-// top-left can't sit empty (or mining becomes the de-facto hero). These are the
-// real entry points — New leads as the single filled primary; a pointer to the
-// gallery below covers the "I already have skills" case.
+// First-run / no-recents on-ramps, unified into one tile family: Mine leads as
+// the filled-accent primary, since mining (not hand-authoring) is how skills get
+// made, with New / Open / Import beside it as plain tiles (also in the toolbar).
+// The pointer below covers the "I already have skills" case.
 function StartPanel({
+  mining,
+  onMine,
+  onContinue,
+  onDetails,
   onNew,
   onOpen,
   onImport,
   count,
 }: {
+  mining: MineState | null;
+  onMine: () => void;
+  onContinue: () => Promise<void>;
+  onDetails: () => void;
   onNew: () => void;
   onOpen: () => void;
   onImport: () => void;
   count: number;
 }) {
   const tileCls =
-    "flex flex-col gap-1.5 rounded-xl border p-4 text-left transition-colors";
+    "flex flex-col gap-1.5 rounded-xl border border-border bg-surface p-4 text-left transition-colors hover:border-border-strong hover:bg-panel";
   return (
     <div>
       <AsideLabel>Get started</AsideLabel>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <button
-          type="button"
-          onClick={onNew}
-          className={`${tileCls} border-transparent bg-accent text-accent-fg hover:bg-accent-strong`}
-        >
-          <span className="flex items-center gap-2 font-semibold">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <MineTile mining={mining} onMine={onMine} onContinue={onContinue} onDetails={onDetails} />
+        <button type="button" onClick={onNew} className={tileCls}>
+          <span className="flex items-center gap-2 font-semibold text-fg">
             <PlusIcon />
             New skill
           </span>
-          <span className="text-xs text-accent-fg/80">Start from a template</span>
+          <span className="text-xs text-muted">Start from a template</span>
         </button>
-        <button
-          type="button"
-          onClick={onOpen}
-          className={`${tileCls} border-border bg-surface hover:border-border-strong hover:bg-panel`}
-        >
+        <button type="button" onClick={onOpen} className={tileCls}>
           <span className="flex items-center gap-2 font-semibold text-fg">
             <OpenIcon />
             Open a skill
           </span>
           <span className="text-xs text-muted">From a folder or path</span>
         </button>
-        <button
-          type="button"
-          onClick={onImport}
-          className={`${tileCls} border-border bg-surface hover:border-border-strong hover:bg-panel`}
-        >
+        <button type="button" onClick={onImport} className={tileCls}>
           <span className="flex items-center gap-2 font-semibold text-fg">
             <ImportIcon />
             Import
@@ -831,17 +854,18 @@ export function Component() {
       </NavBar>
 
       <main className="mx-auto w-full max-w-7xl flex-1 px-6 pb-24 pt-10">
-        {/* Slim utility strip above the main gallery: a quick path back into
-            recent work (or a Start panel on first run) on the left, the mining
-            aside on the right. Both stay compact and quiet — "Your skills" below
-            is the page's main section. */}
-        <section className="grid gap-3 lg:grid-cols-3">
-          <div className="flex flex-col lg:col-span-2">
-            {recents.length > 0 ? (
-              <>
+        {/* Utility strip above the main gallery. With recent work to resume, that
+            leads (left) and mining rides alongside (right); on a fresh start there's
+            nothing to resume, so the row becomes the get-started on-ramps — Mine
+            first as the primary, since mining (not hand-authoring) is how skills
+            actually get made. "Your skills" below is the page's main section. */}
+        <section>
+          {recents.length > 0 ? (
+            <div className="grid gap-3 lg:grid-cols-3">
+              <div className="flex flex-col lg:col-span-2">
                 <AsideLabel>Recent</AsideLabel>
                 {/* flex-1 + auto-rows-fr: the row fills the column so the cards
-                    stretch to the same height as the mining card beside them. */}
+                    stretch to the same height as the mining tile beside them. */}
                 <div className="grid flex-1 auto-rows-fr grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {recents.slice(0, 3).map((r) => (
                     <RecentCard
@@ -852,25 +876,33 @@ export function Component() {
                     />
                   ))}
                 </div>
-              </>
-            ) : (
-              <StartPanel
-                onNew={() => setNewOpen(true)}
-                onOpen={() => setOpenOpen(true)}
-                onImport={() => setImportOpen(true)}
-                count={totalFound}
-              />
-            )}
-          </div>
-          <div className="flex flex-col lg:col-span-1">
-            <AsideLabel>Skill Mining</AsideLabel>
-            <MineCard
+              </div>
+              {/* Recents present → the toolbar already carries New / Open / Import,
+                  so the rail shows just mining, the one on-ramp that isn't up there. */}
+              <div className="flex flex-col lg:col-span-1">
+                <AsideLabel>Skill Mining</AsideLabel>
+                <MineTile
+                  mining={mining}
+                  onMine={() => setMineOpen(true)}
+                  onContinue={continueMining}
+                  onDetails={() => navigate(miningPath())}
+                  highlight={false}
+                  className="flex-1"
+                />
+              </div>
+            </div>
+          ) : (
+            <StartPanel
               mining={mining}
               onMine={() => setMineOpen(true)}
               onContinue={continueMining}
               onDetails={() => navigate(miningPath())}
+              onNew={() => setNewOpen(true)}
+              onOpen={() => setOpenOpen(true)}
+              onImport={() => setImportOpen(true)}
+              count={totalFound}
             />
-          </div>
+          )}
         </section>
 
         <section className="mt-12">

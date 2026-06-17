@@ -123,9 +123,84 @@ pub fn b64_decode(s: &str) -> Vec<u8> {
 
 // ────────────────────────────── tmux helpers ──────────────────────────────
 
+/// The user's shell PATH, resolved once. A GUI-launched desktop app inherits a
+/// minimal PATH that omits ~/.local/bin, the nvm/pyenv/rbenv shims, Homebrew,
+/// etc. — exactly where the agent CLIs live — so the raw process PATH
+/// under-reports installed agents. We recover it by asking an *interactive*
+/// login shell (`-l -i`) for its exported PATH: version managers (nvm, conda, …)
+/// and Homebrew's shellenv extend PATH from ~/.bashrc / ~/.zshrc, which a
+/// non-interactive shell never sources — so a plain login shell would miss, say,
+/// an nvm-installed `codex`. We read the *exported* PATH via `printenv` (it is
+/// colon-joined in every shell, incl. fish, whose own $PATH is a space-joined
+/// list), fenced by sentinels so an rc-file banner can't corrupt it. stdout is
+/// drained on a side thread so a chatty rc can't fill the pipe and deadlock the
+/// shell before it prints; stdin is /dev/null and a deadline kills an rc that
+/// blocks. Empty on failure (we fall back to the process PATH).
+fn login_path() -> std::ffi::OsString {
+    static PATH: OnceLock<std::ffi::OsString> = OnceLock::new();
+    PATH.get_or_init(|| {
+        use std::process::Stdio;
+        let shell = std::env::var("SHELL")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "bash".into());
+        let Ok(mut child) = hidden_command(shell)
+            .args(["-l", "-i", "-c", "printf '<<SSP:'; printenv PATH; printf ':SSP>>'"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+        else {
+            return std::ffi::OsString::new();
+        };
+        // Drain stdout concurrently: an interactive rc may print a banner before
+        // our markers, and >64KB of unread output would block the shell on write
+        // before it reaches printenv. The reader sees EOF once the child exits or
+        // is killed below, so the join always returns.
+        let reader = child.stdout.take().map(|mut out| {
+            thread::spawn(move || {
+                let mut buf = String::new();
+                let _ = out.read_to_string(&mut buf);
+                buf
+            })
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) if std::time::Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break;
+                }
+                Ok(None) => thread::sleep(std::time::Duration::from_millis(20)),
+                Err(_) => break,
+            }
+        }
+        let text = reader.and_then(|r| r.join().ok()).unwrap_or_default();
+        // Our markers print last, after any rc banner — match the final pair.
+        let val = text
+            .rsplit_once("<<SSP:")
+            .and_then(|(_, rest)| rest.split_once(":SSP>>"))
+            .map(|(v, _)| v.trim())
+            .unwrap_or("");
+        std::ffi::OsString::from(val)
+    })
+    .clone()
+}
+
+/// Find `bin` on PATH, searching the process PATH first and then the
+/// login-shell PATH ([`login_path`]) — the latter recovers CLIs that a GUI
+/// launch's stripped-down PATH would otherwise hide.
 fn which(bin: &str) -> Option<String> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    let login = login_path();
+    if !login.is_empty() {
+        dirs.extend(std::env::split_paths(&login));
+    }
+    dirs.into_iter()
         .map(|d| d.join(bin))
         .find(|p| p.is_file())
         .map(|p| p.to_string_lossy().into_owned())
@@ -882,7 +957,9 @@ fn agent_specs() -> Vec<Spec> {
             supports_ide: true,
             ext_prefix: "anthropic.claude-code-",
             ext_rel: ExtRel::File("resources/native-binary/claude"),
-            cli_paths: &["~/.claude/local/claude"],
+            // The native installer's current target (~/.local/bin/claude) and
+            // its older location; covers shells whose login PATH we can't read.
+            cli_paths: &["~/.local/bin/claude", "~/.claude/local/claude"],
             install_dir_env: "",
         },
         Spec {

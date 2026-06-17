@@ -65,7 +65,6 @@ export default function NewTerminalDialog({
   const [agents, setAgents] = useState<AgentOption[] | null>(null);
   const [agentId, setAgentId] = useState("");
   const [cwd, setCwd] = useState("");
-  const [ide, setIde] = useState(false);
   const [skip, setSkip] = useState(false);
   const [auto, setAuto] = useState(false);
   const [extra, setExtra] = useState("");
@@ -90,7 +89,6 @@ export default function NewTerminalDialog({
     const p = loadTerminalPrefs(agentId);
     const wantAuto = p?.auto ?? false;
     setCwd(defaultCwd ?? p?.cwd ?? "");
-    setIde(p?.ide ?? false);
     setAuto(wantAuto);
     // auto and skip are mutually exclusive; auto wins, matching the checkbox
     // handlers and the create() gating, in case stored prefs ever have both.
@@ -112,12 +110,12 @@ export default function NewTerminalDialog({
         cwd: cwd.trim(),
         cols: 80,
         rows: 24,
-        ide: ide && selected.supportsIde,
+        ide: false,
         skipPermissions: skip && !auto && selected.agent === "claude",
         autoMode: auto && selected.agent === "claude",
         extraArgs: tokenizeArgs(extra),
       });
-      saveTerminalPrefs(selected.id, { cwd: cwd.trim(), ide, skip, auto, extra });
+      saveTerminalPrefs(selected.id, { cwd: cwd.trim(), ide: false, skip, auto, extra });
       onCreated(s);
     } catch (e) {
       setBusy(false);
@@ -178,12 +176,6 @@ export default function NewTerminalDialog({
           </div>
 
           {/* Per-agent options */}
-          {selected?.supportsIde && (
-            <label className="flex items-center gap-2 text-sm text-fg">
-              <input type="checkbox" checked={ide} onChange={(e) => setIde(e.target.checked)} className="accent-accent" />
-              Connect to the running editor (<code className="font-mono text-[0.85em]">--ide</code>)
-            </label>
-          )}
           {selected?.agent === "claude" && (
             <div className="space-y-2">
               <label className="flex items-center gap-2 text-sm text-fg">

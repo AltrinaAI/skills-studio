@@ -4,9 +4,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import NavBar from "@/components/NavBar";
 import NewTerminalDialog from "@/components/NewTerminalDialog";
+import ResizeHandle from "@/components/ResizeHandle";
 import TerminalPane from "@/components/TerminalPane";
 import * as api from "@/lib/api";
 import type { TermSession } from "@/lib/api";
+
+const RAIL_KEY = "skillviewer-terminals-rail";
+
+function readRailW(): number {
+  try {
+    const v = Number(localStorage.getItem(RAIL_KEY));
+    return Number.isFinite(v) && v > 0 ? v : 240;
+  } catch {
+    return 240;
+  }
+}
 
 function PlusIcon() {
   return (
@@ -124,6 +136,23 @@ export default function TerminalsWorkspace({
     return () => ro.disconnect();
   }, []);
 
+  // Draggable sessions rail on the full page (the embedded panel is sized by its
+  // host, AgentPanel). Width persists across visits; the ResizeHandle is the
+  // divider, so the rail drops its own border. Clamped to keep the terminal usable.
+  const railRef = useRef<HTMLElement>(null);
+  const [railW, setRailW] = useState(readRailW);
+  const dragRail = useCallback((clientX: number) => {
+    const left = railRef.current?.getBoundingClientRect().left;
+    if (left == null) return;
+    const w = Math.round(Math.max(180, Math.min(520, clientX - left)));
+    setRailW(w);
+    try {
+      localStorage.setItem(RAIL_KEY, String(w));
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   const active = sessions.find((s) => s.id === activeId) ?? null;
 
   const pane = active ? (
@@ -215,7 +244,9 @@ export default function TerminalsWorkspace({
       ) : (
         <div className="flex min-h-0 flex-1">
           <aside
-            className={`flex ${embedded ? "w-44" : "w-60"} shrink-0 flex-col border-r border-border bg-surface`}
+            ref={railRef}
+            style={embedded ? undefined : { width: railW }}
+            className={`flex shrink-0 flex-col bg-surface ${embedded ? "w-44 border-r border-border" : ""}`}
           >
             {embedded && (
               <div className="flex items-center justify-between border-b border-border py-1 pl-3 pr-1.5">
@@ -268,6 +299,8 @@ export default function TerminalsWorkspace({
               )}
             </div>
           </aside>
+
+          {!embedded && <ResizeHandle axis="col" onDragTo={dragRail} />}
 
           <main className="min-w-0 flex-1 bg-surface">{pane}</main>
         </div>
