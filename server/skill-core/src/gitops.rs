@@ -137,7 +137,8 @@ pub fn git_available() -> bool {
 /// shared. Written to the repo's LOCAL `.git/info/exclude`, NOT a committed
 /// `.gitignore`: per-repo, never committed, never pushed, never global, so
 /// nothing clutters the worktree or the published repo.
-const EXCLUDE_PATTERNS: &[&str] = &["__pycache__/", "*.py[cod]", ".DS_Store", ".env", ".env.*"];
+const EXCLUDE_PATTERNS: &[&str] =
+    &["__pycache__/", "*.py[cod]", ".venv/", "node_modules/", ".DS_Store", ".env", ".env.*"];
 
 /// Ensure this repo's local `.git/info/exclude` carries [`EXCLUDE_PATTERNS`].
 /// Idempotent and additive: any lines already there (incl. the user's own) are
@@ -1145,9 +1146,13 @@ mod tests {
         let _ = git(&base, &["config", "user.email", "test@example.com"]);
         let _ = git(&base, &["config", "user.name", "Test"]);
 
-        // The junk a Python skill leaves behind, plus a stray secret.
+        // The junk Python/Node skills leave behind, plus a stray secret.
         std::fs::create_dir_all(base.join("scripts/__pycache__")).unwrap();
         std::fs::write(base.join("scripts/__pycache__/_config.cpython-312.pyc"), [0u8, 1, 2]).unwrap();
+        std::fs::create_dir_all(base.join(".venv/bin")).unwrap();
+        std::fs::write(base.join(".venv/bin/python"), "x").unwrap();
+        std::fs::create_dir_all(base.join("node_modules/left-pad")).unwrap();
+        std::fs::write(base.join("node_modules/left-pad/index.js"), "x").unwrap();
         std::fs::write(base.join(".env"), "SECRET=1\n").unwrap();
 
         // Viewing the repo seeds the local exclude — it's never a committed file…
@@ -1158,13 +1163,19 @@ mod tests {
         let wt = git_worktree_diff(&root).unwrap();
         let paths: Vec<&str> = wt.files.iter().map(|f| f.path.as_str()).collect();
         assert!(paths.contains(&"SKILL.md"));
-        assert!(!paths.iter().any(|p| p.contains("__pycache__") || p.ends_with(".env")), "junk hidden: {paths:?}");
+        assert!(
+            !paths.iter().any(|p| p.contains("__pycache__") || p.contains(".venv") || p.contains("node_modules") || p.ends_with(".env")),
+            "junk hidden: {paths:?}"
+        );
 
-        // The commit captures SKILL.md but neither the .pyc nor the .env.
+        // The commit captures SKILL.md but none of the env/dep/build junk.
         git_commit(&root, "v1").unwrap();
         let tracked = git_ok(&base, &["ls-files"]).unwrap();
         assert!(tracked.contains("SKILL.md"));
-        assert!(!tracked.contains("__pycache__") && !tracked.contains(".env"), "tracked: {tracked}");
+        assert!(
+            !["__pycache__", ".venv", "node_modules", ".env"].iter().any(|j| tracked.contains(j)),
+            "tracked: {tracked}"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }
