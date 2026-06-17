@@ -1121,6 +1121,17 @@ mod tests {
         assert!(save_pasted_image("!!!not-base64!!!", "image/png").is_err(), "undecodable payload");
     }
 
+    /// Kills its tmux session on drop, so a panicking assertion in a tmux-gated
+    /// test can't strand a detached `ass-*` session (a stray `bash -l`) in the dev
+    /// box's / CI runner's tmux server — the app's GC only reaps those after a
+    /// week. Backstops the explicit kill_session calls (a second kill is a no-op).
+    struct SessionGuard(String);
+    impl Drop for SessionGuard {
+        fn drop(&mut self) {
+            let _ = kill_session(&self.0);
+        }
+    }
+
     // tmux-gated: attach → write keystrokes → read echoed output.
     #[test]
     fn tmux_attach_roundtrip() {
@@ -1130,6 +1141,7 @@ mod tests {
         }
         let cwd = std::env::temp_dir().to_string_lossy().into_owned();
         let s = create_session("shell", &cwd, 100, 30, false, false, false, &[]).expect("create");
+        let _guard = SessionGuard(s.id.clone());
         let (att, rx) = attach(&s.id, 100, 30).expect("attach");
         std::thread::sleep(std::time::Duration::from_millis(600)); // let the shell start
         write(&s.id, b"echo HELLO_RT\n").expect("write");
@@ -1158,6 +1170,7 @@ mod tests {
         }
         let cwd = std::env::temp_dir().to_string_lossy().into_owned();
         let s = create_session("shell", &cwd, 80, 24, false, false, false, &[]).expect("create");
+        let _guard = SessionGuard(s.id.clone());
         assert!(
             s.id.starts_with(&format!("{PREFIX}{}-", std::process::id())),
             "names are pid-namespaced so two backends can't collide: {}",
@@ -1217,6 +1230,7 @@ mod tests {
 
         // A non-shell foreground process (stand-in for a running agent).
         let live = create_session("shell", &cwd, 80, 24, false, false, false, &[]).expect("create");
+        let _live_guard = SessionGuard(live.id.clone());
         let _ = tmux().args(["send-keys", "-t", &live.id, "exec sleep 300", "Enter"]).output();
         // Wait for the exec to land: the pane PROCESS becomes `sleep`. (Don't
         // sample all_panes_are_shells for this — the keep-alive login shell's
@@ -1247,6 +1261,7 @@ mod tests {
 
         // An attached client protects even a plain idle shell.
         let watched = create_session("shell", &cwd, 80, 24, false, false, false, &[]).expect("create");
+        let _watched_guard = SessionGuard(watched.id.clone());
         let (att, _rx) = attach(&watched.id, 80, 24).expect("attach");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         let attached = |id: &str| {
@@ -1279,6 +1294,7 @@ mod tests {
         }
         let cwd = std::env::temp_dir().to_string_lossy().into_owned();
         let s = create_session_cmd("shell", &cwd, 80, 24, "sleep 3").expect("create");
+        let _guard = SessionGuard(s.id.clone());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         while std::time::Instant::now() < deadline && agent_exited(&s.id) {
             std::thread::sleep(std::time::Duration::from_millis(50));
