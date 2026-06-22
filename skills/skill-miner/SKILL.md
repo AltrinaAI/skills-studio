@@ -115,7 +115,9 @@ repeated ask)**.
    it clearly recurs, and don't ship a repeatable task that has nothing to improve and
    no repeated ask.
 4. **Generate / modify ≤ 5 skills.** Write each as concrete content: the rule, the
-   trigger, the steps/commands, the quirk + workaround. Where it lands:
+   trigger, the steps/commands, the quirk + workaround — with file paths **relative
+   to the repo root** (`src/pages/Run.tsx`), never machine-specific absolutes
+   (`/home/<user>/…`) copied from a transcript. Where it lands:
    - **Extending an existing skill** → edit it **in place** at the skill path. Don't
      fork or copy it. Skill Studio tracks every skill in git, so the user reviews
      your uncommitted changes (flagged on its home page) and either saves a version
