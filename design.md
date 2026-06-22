@@ -191,7 +191,7 @@ Implemented as a **local proxy switchboard** — the realization of "local is ju
 where the host is localhost." The webview NEVER changes origin; the server it talks to
 becomes a switchboard:
 
-- `/api/remote/{list,connect,disconnect,status}` is the **connection manager**, always
+- `/api/remote/{list,connect,disconnect,status,last}` is the **connection manager**, always
   handled locally. The impl is `SshRemoteControl` in
   [server/skill-server/src/sshmgr/](server/skill-server/src/sshmgr/) (a `RemoteControl`
   trait object on `ServerConfig`); it shells out to the system `ssh`, or — for a local
