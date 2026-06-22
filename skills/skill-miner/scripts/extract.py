@@ -3,11 +3,14 @@
 
 For every discovered conversation: parse it (agent-specific adapter) to user
 turns + touched paths, infer `main_dir` (deepest folder where most work happened)
-and `datetime`/`skills_used` deterministically, then call a CHEAP LLM for the
-`theme` (headline), `topics` (full-sentence scope, one per conv unless the
-subject genuinely shifts) and `feedback` (a short natural-language summary of
-explicit user feedback — corrections, durable preferences, asserted domain
-facts; "" for most sessions). Writes conversations.jsonl.
+and `datetime`/`skills_used` deterministically, then call a CHEAP LLM for
+`topics` (scope, usually one — doubles as the headline — for grouping), `tasks`
+(what the user asked the agent to do, for spotting repeated asks) and two
+feedback arrays — `env_feedback` (what running the work revealed: failures,
+recurring quirks, roundabout paths + shortcuts) and `user_feedback` (the user's
+reactions/corrections — expert insight). The cheap call sees only user turns, so
+`env_feedback` is what the user *said about* what ran, not raw tool output; each
+array is `[]` for the typical session. Writes conversations.jsonl.
 
   python3 extract.py --inventory ./out/inventory.jsonl \
                      --out ./out/conversations.jsonl --workers 12
@@ -20,39 +23,48 @@ import common, llm
 SYS = ("You are a strict JSON labeler. Output ONLY one JSON object: no prose, "
        "no code fences, no echoing of input data.")
 
-PROMPT = """Label one developer coding-agent session to capture its SCOPE so similar sessions can be grouped later. Below are the user's messages in order (tool output stripped).{skill_note}
+PROMPT = """Read ONE coding-agent session — only the USER's messages, in order (`[skill used: X]` marks where the agent ran a skill; the agent's replies and tool output are NOT shown).{skill_note} Name what it was about, then copy out three kinds of signal in the user's own words (never guess). Most arrays are empty for a routine session.
 
-Output ONLY one JSON object with exactly:
-- "theme": a short headline label (max ~12 words) naming what the session did.
-- "topics": an array of FULL SENTENCES, each a semantically meaningful description of a distinct subject/thread of work. Use ONE topic for most sessions. Add another ONLY when the conversation clearly shifts to a substantially different subject (NOT minor follow-ups, tweaks, bug-fixes, or sub-steps of the same effort). Aim for 1; rarely more than 2-3.
-- "feedback": one short natural-language sentence (two at most) summarizing any EXPLICIT user feedback in the session: corrections to the agent's work or approach, durable preferences/rules for how work should be done, asserted domain facts the agent didn't know, clear approval or frustration. Most sessions have none — then use "". Plain task requests and instructions are NOT feedback.
+Output ONLY one JSON object with exactly these keys:
+- "topics": array of FULL SENTENCES naming the session's GENERAL subject. ALMOST ALWAYS ONE — roll every sub-step, tweak, bug-fix, and related follow-up of the same overall effort into that single topic. Add a second element ONLY when the session covers a genuinely UNRELATED effort (rare); even then give each its own element — never join two subjects with ";" or "and" in one string.
+- "tasks": array of SHORT strings — the concrete tasks the user gave the agent, with any constraint they attached up front ("add a dark-mode toggle", "use the existing helper, don't write a new one", "don't touch the tests"). The WHAT the user asked for.
+- "env_feedback": array of SHORT strings — what the user said the ENVIRONMENT did when something ran: a failure or surprise ("migration failed with a lock timeout"), a recurring quirk worked around ("must run from repo root or paths break"), a roundabout path and its shortcut ("don't rebuild the image, just restart the worker"). Mark a one-time setup step "(setup)". Use [] when none.
+- "user_feedback": array of SHORT strings — the user's REACTION to work already done: a correction ("no, don't hardcode the URL"), a better way they knew and we didn't, a domain fact we got wrong, clear approval or frustration ("third time you've made this mistake"). Use [] when none.
 
-If the session is empty/trivial, use theme "trivial/empty session" and a single topic saying so.
+Unsure where it goes? An up-front ask → tasks; a reaction to work done → user_feedback. Empty/trivial session: a single topic "trivial/empty session", [] elsewhere.
 
 USER MESSAGES (in order):
 <<<
 {body}
 >>>"""
 
-SKILL_NOTE = (" Lines like `[skill used: X]` mark where the agent invoked a skill; how the"
-              " user responds right after one is feedback worth summarizing.")
+SKILL_NOTE = (" What the user says right after a `[skill used: X]` line is often feedback on that"
+              " skill — that it did the right or wrong thing, or that its steps failed here.")
+
+def _as_list(v, cap_items=6, cap_len=300):
+    """Coerce a small model's value into a clean list of short strings — it may
+    hand back a bare string, a dict, or null instead of an array."""
+    if v is None: return []
+    if isinstance(v, dict): v = list(v.values())
+    if isinstance(v, str): v = [v] if v.strip() else []
+    if not isinstance(v, (list, tuple)): return []
+    return [str(x).strip()[:cap_len] for x in v if str(x).strip()][:cap_items]
 
 def label(condensed):
     has_skills = "[skill used:" in (condensed or "")
     try:
         j = llm.complete_json(SYS, PROMPT.format(
                 body=condensed or "(no user messages)",
-                skill_note=SKILL_NOTE if has_skills else ""), max_tokens=700)
+                skill_note=SKILL_NOTE if has_skills else ""), max_tokens=800)
         tp = j.get("topics")
         if isinstance(tp, str): tp = [tp]
-        fb = j.get("feedback", "")
-        if isinstance(fb, (list, tuple)):  # tolerate a stray array from small models
-            fb = "; ".join(str(x).strip() for x in fb if str(x).strip())
-        return {"theme": str(j.get("theme", ""))[:200],
-                "topics": [str(x).strip()[:400] for x in (tp or []) if str(x).strip()][:5],
-                "feedback": str(fb).strip()[:300]}
+        return {"topics": [str(x).strip()[:400] for x in (tp or []) if str(x).strip()][:5],
+                "tasks": _as_list(j.get("tasks")),
+                "env_feedback": _as_list(j.get("env_feedback")),
+                "user_feedback": _as_list(j.get("user_feedback"))}
     except Exception as e:
-        return {"theme": "<error>", "topics": ["error"], "feedback": "", "error": str(e)[:120]}
+        return {"topics": ["<error>"], "tasks": [], "env_feedback": [],
+                "user_feedback": [], "error": str(e)[:120]}
 
 def main():
     ap = argparse.ArgumentParser()
@@ -100,13 +112,13 @@ def main():
     nerr = 0
     with open(args.out, "w") as f:
         for r in results:
-            if r["theme"] == "<error>": nerr += 1
+            if r["topics"] == ["<error>"]: nerr += 1
             f.write(json.dumps({
                 "agent": r["agent"], "session_id": r["session_id"], "path": r["path"],
                 "main_dir": r["main_dir"], "datetime": r["first_ts"],
-                "n_user_turns": r["n_user_turns"], "theme": r["theme"],
-                "topics": r["topics"], "skills_used": r["skills_used"],
-                "feedback": r["feedback"],
+                "n_user_turns": r["n_user_turns"], "topics": r["topics"],
+                "tasks": r["tasks"], "skills_used": r["skills_used"],
+                "env_feedback": r["env_feedback"], "user_feedback": r["user_feedback"],
             }, ensure_ascii=False) + "\n")
     print(f"wrote {len(results)} rows -> {args.out}  ({nerr} label errors)", file=sys.stderr)
 
