@@ -123,17 +123,19 @@ const byKindThenName = (a: DiscoveredSkill, b: DiscoveredSkill) =>
   kindMeta(a.kind).rank - kindMeta(b.kind).rank ||
   (a.name ?? baseName(a.root)).localeCompare(b.name ?? baseName(b.root));
 
+// Every discovered skill renders through this one card so they stay identical —
+// personal, official, plugin and studio differ only by the kind badge. The
+// delete control is intrinsic (shown whenever an onDelete handler is wired), not
+// an opt-in per kind: that's what keeps a card from ever shipping half-built.
 function SkillCard({
   skill,
   dirty,
-  deletable,
   deleting,
   onOpen,
   onDelete,
 }: {
   skill: DiscoveredSkill;
   dirty?: boolean;
-  deletable?: boolean;
   deleting?: boolean;
   onOpen: (p: string) => void;
   onDelete?: (skill: DiscoveredSkill) => void;
@@ -166,7 +168,7 @@ function SkillCard({
           {skill.root}
         </span>
       </button>
-      {deletable && onDelete && (
+      {onDelete && (
         <button
           type="button"
           onClick={(e) => {
@@ -231,9 +233,10 @@ const AGENT_LABELS: Record<string, string> = { "Agent Skills": "Standard Agent S
 const agentLabel = (agent: string) => AGENT_LABELS[agent] ?? agent;
 
 // One section per agent (the skill's source). Mined proposals lead the grid
-// (green-tinted, awaiting acceptance), then your own skills; everything you
-// didn't author — built-in/official skills and third-party plugins — collapses
-// together behind a single toggle (default collapsed).
+// (green-tinted, awaiting acceptance), then any official/plugin skill you've
+// edited (uncommitted changes — pulled out so a pending review never hides), then
+// your own skills; the remaining built-in/official skills and third-party plugins
+// you haven't touched collapse together behind a single toggle (default collapsed).
 function AgentSection({
   group,
   dirtyRoots,
@@ -259,9 +262,14 @@ function AgentSection({
   const own = group.skills
     .filter((s) => !s.proposed && kindMeta(s.kind).kind === "personal")
     .sort(byKindThenName);
-  const bundled = group.skills
+  const allBundled = group.skills
     .filter((s) => !s.proposed && kindMeta(s.kind).kind !== "personal")
     .sort(byKindThenName);
+  // A changed bundled skill is "pending review" too — don't bury it behind the
+  // collapse. Surface it in the open grid (just after proposals); only the
+  // untouched ones stay collapsed, and the toggle tally counts just those.
+  const changedBundled = allBundled.filter((s) => dirtyRoots.has(s.root));
+  const bundled = allBundled.filter((s) => !dirtyRoots.has(s.root));
   // The Skill Studio activation skill counts as official here; its distinct
   // badge sets it apart in the list, so it needs no separate tally.
   const officialCount = bundled.filter((s) => {
@@ -302,9 +310,9 @@ function AgentSection({
         {info && <SharedStandardInfo info={info} />}
         {/* No cards to anchor the section: the bundled toggle joins the header
             row instead of dangling alone beneath it. */}
-        {own.length === 0 && proposals.length === 0 && bundledToggle}
+        {own.length === 0 && proposals.length === 0 && changedBundled.length === 0 && bundledToggle}
       </div>
-      {(own.length > 0 || proposals.length > 0) && (
+      {(own.length > 0 || proposals.length > 0 || changedBundled.length > 0) && (
         <div className={gridCls}>
           {proposals.map((s) => (
             <ProposedCard
@@ -316,12 +324,21 @@ function AgentSection({
               onDiscard={onDiscard}
             />
           ))}
+          {changedBundled.map((s) => (
+            <SkillCard
+              key={s.root}
+              skill={s}
+              dirty
+              deleting={deletingRoot === s.root}
+              onOpen={onOpen}
+              onDelete={onDelete}
+            />
+          ))}
           {own.map((s) => (
             <SkillCard
               key={s.root}
               skill={s}
               dirty={dirtyRoots.has(s.root)}
-              deletable
               deleting={deletingRoot === s.root}
               onOpen={onOpen}
               onDelete={onDelete}
@@ -329,11 +346,20 @@ function AgentSection({
           ))}
         </div>
       )}
-      {(own.length > 0 || proposals.length > 0) && bundledToggle && <div className="mt-3">{bundledToggle}</div>}
+      {(own.length > 0 || proposals.length > 0 || changedBundled.length > 0) && bundledToggle && (
+        <div className="mt-3">{bundledToggle}</div>
+      )}
       {showBundled && bundled.length > 0 && (
         <div className={`mt-3 ${gridCls}`}>
           {bundled.map((s) => (
-            <SkillCard key={s.root} skill={s} dirty={dirtyRoots.has(s.root)} onOpen={onOpen} onDelete={onDelete} />
+            <SkillCard
+              key={s.root}
+              skill={s}
+              dirty={dirtyRoots.has(s.root)}
+              deleting={deletingRoot === s.root}
+              onOpen={onOpen}
+              onDelete={onDelete}
+            />
           ))}
         </div>
       )}
