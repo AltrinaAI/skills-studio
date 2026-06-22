@@ -48,8 +48,8 @@ python3 scripts/discover.py  --since 35 --out $OUT/inventory.jsonl       # find 
 python3 scripts/extract.py   --inventory $OUT/inventory.jsonl --out $OUT/conversations.jsonl --workers 10
 ```
 
-- `discover.py` walks each adapter in `common.py:ADAPTERS` (Claude Code, Codex; add
-  more there) and keeps sessions from the last `--since` days. Start with at most
+- `discover.py` walks each adapter in `common.py:ADAPTERS` (Claude Code, Codex,
+  opencode; add more there) and keeps sessions from the last `--since` days. Start with at most
   100 conversations unless the user asks for more. Add `--limit 15` to `extract.py`
   to sample fast.
 - `extract.py` parses each conversation and emits one JSONL row:
@@ -135,9 +135,10 @@ repeated ask)**.
 ## Extending to other agents
 
 Each agent stores transcripts differently. To support a new one (Gemini CLI,
-opencode, Cursor, …) add a `(discover_fn, parse_fn)` pair to `common.py:ADAPTERS`
-that yields the normalized record (`_norm(...)`). The rest of the pipeline is
-unchanged. Cursor (sqlite `state.vscdb`) is not yet wired up.
+Cursor, …) add a `(discover_fn, parse_fn)` pair to `common.py:ADAPTERS` that yields
+the normalized record (`_norm(...)`). The rest of the pipeline is unchanged. Cursor
+(sqlite `state.vscdb`) is not yet wired up — opencode's adapter is a DB-backed
+(SQLite) template to follow.
 
 ## Notes
 

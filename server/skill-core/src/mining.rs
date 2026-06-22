@@ -228,10 +228,14 @@ fn ensure_installed_in(home: &Path, bundled: Option<&Path>) -> Result<PathBuf, S
 /// walk as [`ensure_installed_in`], but unconditional. Returns the restored
 /// roots.
 pub fn reinstall_miner(bundled: Option<&Path>) -> Result<Vec<String>, String> {
+    let home = dirs::home_dir().ok_or_else(|| "Cannot locate home directory.".to_string())?;
+    reinstall_miner_in(&home, bundled)
+}
+
+fn reinstall_miner_in(home: &Path, bundled: Option<&Path>) -> Result<Vec<String>, String> {
     let bundled = bundled
         .filter(|s| s.join("SKILL.md").exists())
         .ok_or_else(|| "Bundled skill-miner skill not found.".to_string())?;
-    let home = dirs::home_dir().ok_or_else(|| "Cannot locate home directory.".to_string())?;
     let mut restored = Vec::new();
     for dest in &secrets::INSTALL_DESTS {
         if !dest.triggers.iter().any(|t| home.join(t).exists()) {
@@ -239,14 +243,26 @@ pub fn reinstall_miner(bundled: Option<&Path>) -> Result<Vec<String>, String> {
         }
         let target = home.join(dest.skills_rel).join(MINER_SKILL);
         install_skill(bundled, &target)?;
+        commit_synced(&target);
         restored.push(target.to_string_lossy().into_owned());
     }
     if restored.is_empty() {
         let target = home.join(".agents/skills").join(MINER_SKILL);
         install_skill(bundled, &target)?;
+        commit_synced(&target);
         restored.push(target.to_string_lossy().into_owned());
     }
     Ok(restored)
+}
+
+/// Commit the just-restored copy so the refresh doesn't linger as an uncommitted
+/// diff against the user's version history. Best-effort: silently skips an
+/// untracked copy, a no-op (already in sync), or a machine with no git identity
+/// — the reinstall itself already succeeded.
+fn commit_synced(target: &Path) {
+    if target.join(".git").is_dir() {
+        let _ = crate::gitops::git_commit(&target.to_string_lossy(), "sync to vendored version");
+    }
 }
 
 /// Readiness of the installed skill-miner relative to the bundled official copy,
@@ -733,6 +749,45 @@ mod tests {
 
         // No bundled source to compare against → never nag.
         assert!(!miner_status_in(&home, None).drifted);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn reinstall_commits_a_tracked_copy_so_no_diff_lingers() {
+        use crate::gitops;
+        if !gitops::git_available() {
+            return; // skip on machines without git
+        }
+        let base = std::env::temp_dir().join(format!("ass_mine_reinstall_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let home = base.join("home");
+        std::fs::create_dir_all(home.join(".codex")).unwrap(); // cohort → shared dir
+        let src = base.join("bundled/skill-miner");
+        std::fs::create_dir_all(src.join("scripts")).unwrap();
+        std::fs::write(src.join("SKILL.md"), "official v1").unwrap();
+        std::fs::write(src.join("scripts/common.py"), "adapter v1").unwrap();
+
+        // First install + version it (as auto-track would), with a local identity.
+        ensure_installed_in(&home, Some(&src)).unwrap();
+        let copy = home.join(".agents/skills/skill-miner");
+        let root = copy.to_string_lossy().to_string();
+        gitops::git_init(&root).unwrap();
+        let _ = gitops::git(&copy, &["config", "user.email", "test@example.com"]);
+        let _ = gitops::git(&copy, &["config", "user.name", "Test"]);
+        gitops::git_commit(&root, "baseline").unwrap();
+        assert!(gitops::git_status(&root).unwrap().is_empty(), "clean after baseline");
+
+        // A newer bundled version (e.g. adds the opencode adapter) → reinstall.
+        std::fs::write(src.join("scripts/common.py"), "adapter v2 + opencode").unwrap();
+        reinstall_miner_in(&home, Some(&src)).unwrap();
+
+        // The restore is committed as "sync to vendored version" — no lingering diff.
+        assert!(gitops::git_status(&root).unwrap().is_empty(), "no uncommitted diff after reinstall");
+        assert_eq!(gitops::recent_subjects(&root, 1).first().map(String::as_str), Some("sync to vendored version"));
+        assert!(
+            std::fs::read_to_string(copy.join("scripts/common.py")).unwrap().contains("opencode"),
+            "the new bundled content actually landed"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 }
