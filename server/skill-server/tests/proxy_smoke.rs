@@ -17,7 +17,7 @@ impl RemoteControl for FixedRemote {
     fn connect(&self, _host: &str) -> Result<(), String> {
         Ok(())
     }
-    fn disconnect(&self) -> Result<(), String> {
+    fn disconnect(&self, _forget: bool) -> Result<(), String> {
         Ok(())
     }
     fn status(&self) -> RemoteStatus {
