@@ -110,9 +110,16 @@ jobs:
           # fails to mount its tools ("failed to run linuxdeploy"). This makes them
           # self-extract and run without FUSE. No-op on macOS/Windows.
           APPIMAGE_EXTRACT_AND_RUN: "1"
-          # macOS signing / notarization (add as repo secrets when ready):
-          # APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
-          # APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
+          # macOS code signing (Developer ID) + notarization: with these set,
+          # tauri-action imports the cert and `tauri build` signs, notarizes, and
+          # staples automatically. APPLE_SIGNING_IDENTITY overrides the ad-hoc "-"
+          # in tauri.conf.json; the vars are ignored on the Windows/Linux legs.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           # Updater artifact signing (minisign .sig files, separate from OS code
           # signing). Unset password defaults to empty on CI.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

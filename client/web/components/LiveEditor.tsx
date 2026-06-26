@@ -244,7 +244,7 @@ class TableWidget extends WidgetType {
     view.dom.appendChild(input);
     let active: { from: number; to: number; raw: string } | null = null;
 
-    const close = (save: boolean) => {
+    const close = (save: boolean, deferDispatch = false) => {
       const a = active;
       active = null;
       input.style.display = "none";
@@ -252,7 +252,16 @@ class TableWidget extends WidgetType {
       if (!a || !save) return;
       // Keep the table valid: no newlines, and escape any new pipes.
       const next = input.value.replace(/\r?\n/g, " ").replace(/(?<!\\)\|/g, "\\|");
-      if (next !== a.raw) view.dispatch({ changes: { from: a.from, to: a.to, insert: next } });
+      if (next === a.raw) return;
+      const apply = () => view.dispatch({ changes: { from: a.from, to: a.to, insert: next } });
+      // Committing re-renders the table (a block widget) and changes its height.
+      // If the click that ended the edit lands elsewhere in THIS editor, doing
+      // that synchronously reflows the page mid-click, so CodeMirror resolves the
+      // click against the post-shrink layout and the caret jumps far from where
+      // the user aimed (worst with a big deletion). Defer past the click so it
+      // resolves against stable layout; the cell box is already hidden, no flicker.
+      if (deferDispatch) requestAnimationFrame(() => view.dom.isConnected && apply());
+      else apply();
     };
     // A wide table scrolls horizontally on its own; commit and close if anything
     // scrolls so the box never detaches from its cell.
@@ -290,7 +299,14 @@ class TableWidget extends WidgetType {
         close(true);
       }
     });
-    input.addEventListener("blur", () => close(true));
+    input.addEventListener("blur", (e) => {
+      // Defer the commit only when focus stays inside the editor (the "next
+      // click" places a caret in the same document — see close()). When focus
+      // leaves the editor (switching files/panels), commit now so an unmount
+      // can't drop the edit.
+      const stay = e.relatedTarget instanceof Node && view.dom.contains(e.relatedTarget);
+      close(true, stay);
+    });
 
     const ncols = header ? header.length : rows[0]?.length ?? 0;
 
