@@ -1,110 +1,89 @@
 # Skill Studio — Architecture & Design Principles
 
-> Read this before adding a feature. The one rule that matters most:
-> **every capability is reached over HTTP. There is no second transport.**
+> Read before adding a feature. **One rule: every capability is reached over HTTP. There is no second transport.**
 
-## Core principle: frontend ⇄ backend over HTTP (separable, VS Code-remote model)
+## One transport: HTTP only
 
-The app is two parts that can run on **different machines**:
+Two parts that can run on **different machines** (the VS Code-remote model):
 
-- **Backend (Rust), `server/`.** All real work — filesystem, git, skill discovery,
-  secrets, app-managed terminals, the on-device LLM — lives in `server/skill-core`
-  (transport-agnostic, **no GUI/Tauri deps**); `server/skill-term` handles terminals;
-  `server/skill-server` exposes them over HTTP at `/api/*` (+ SSE) and serves the UI.
-- **Frontend (React/TS), `client/web/`.** Talks to the backend through
-  `client/web/lib/api.ts`. `client/desktop/` is the Tauri shell that hosts the webview.
+- **Backend (Rust, `server/`).** All real work — fs, git, skill discovery, secrets,
+  terminals, on-device LLM — lives in `server/skill-core` (transport-agnostic, **no Tauri
+  deps**); `skill-term` handles tmux terminals; `skill-server` exposes everything over
+  `/api/*` (+ **SSE** for streaming) and serves the built UI.
+- **Frontend (React/TS, `client/web/`).** Reaches the backend only through
+  `client/web/lib/api.ts` — `http()` + `EventSource`, **never Tauri `invoke`, no `isTauri`
+  branch**. `client/desktop/` is the thin Tauri shell.
 
-The contract between them is **HTTP/JSON** (plus **SSE** for streaming). That contract
-is what lets the backend run on one machine (WSL2, a remote dev box, a container) and
-the frontend on another — the VS Code-remote model.
+**Browser** loads the SPA from skill-server and calls `/api/*` same-origin. **Desktop** brings
+up one local loopback `skill-server` and points the webview at `http://127.0.0.1:<port>`; for
+the remote case that local server is a **switchboard** reverse-proxying `/api/*` to an
+on-demand remote server (the tunnel's local end is also loopback). So **"local" is just
+"remote where the host is localhost"** — identical code both ways, `/api/*` always same-origin
+(the desktop CSP `default-src 'self'` covers it). Any *outbound* network beyond the server must
+originate in **Rust**, never the webview. (We dropped the `invoke` fast path because dual
+transports silently diverge — a feature wired only through `invoke` broke browser/remote.)
 
-## One transport: HTTP only (decided)
+## Adding a feature
 
-**There is exactly one data path: HTTP/JSON + SSE.** The frontend never calls Tauri
-`invoke` for data; `skill-server` is the whole API.
+1. **Logic** → a fn in `skill-core` (Tauri-free).
+2. **HTTP route** → a match arm in `skill-server`'s `handle()` at `/api/<name>`. **This is the
+   API** — if you can't reach it from skill-server, it isn't done.
+3. **Frontend** → one fn in `client/web/lib/api.ts` calling `http(...)`.
 
-- **Browser.** Loads the SPA from skill-server and calls `/api/*` on the same origin.
-- **Desktop (Tauri).** The native shell is a **thin client**, not a backend: on startup
-  it brings up a `skill-server` (a loopback one for local use; a tunneled remote one for
-  the VS Code-remote case) and points the webview at `http://127.0.0.1:<port>`. The
-  webview then runs the exact same SPA, hitting `/api/*` on that same origin.
+- **Streaming** = SSE (`request.into_writer()` + chunked `data:`, see `stream_terminal`),
+  consumed via `EventSource`. Rides a plain socket and an SSH tunnel alike — no duplex channel.
+- **No native-only capabilities.** A native OS dialog only sees the *client* machine, breaking
+  the remote model. Browse the (possibly remote) fs via `/api/list-dir` + the in-app
+  `FolderPicker`; import via `/api/import-zip`; export via `/api/download`.
 
-So **"local" is just "remote where the host is localhost."** Both run identical code.
+*Reference (keyless commit messages):* `commitmsg.rs` (diff prep, cache) → `commit_agent.rs`
+shells out to a logged-in coding-agent CLI (Claude Code → Codex → Gemini, keyless via
+subscription OAuth; opencode last, BYO-key); `engine.rs` (llama.cpp) is opt-in offline
+(`SKILL_STUDIO_COMMIT_AGENT=llama`). Routes `POST /api/generate-commit-message`,
+`GET /api/commit-model-status` → `api.generateCommitMessage()` / `api.commitModelStatus()`.
 
-> **Why we removed the `invoke` fast path.** A dual `invoke`/HTTP transport meant every
-> capability had two call sites and could silently diverge — a feature wired only through
-> `invoke` worked in the native app but broke the browser/remote deployment. Collapsing to
-> HTTP-only erases that divergence and makes "connect to any server you have SSH access to"
-> a configuration change, not a second architecture.
+## UI layout (frontend IA)
 
-### Same-origin keeps the CSP simple
+Hash router (`createHashRouter`, Tauri webview) with one persistent shell + lazy pages.
+**The shell never unmounts; each page mounts its own `NavBar`** (the shell does not).
 
-Because the webview always points at the active server's origin, `/api/*` (fetch **and**
-the SSE `EventSource`) is always **same-origin**. The desktop CSP `default-src 'self'`
-already covers it — local loopback and a remote SSH tunnel alike (the tunnel's local end
-is also `127.0.0.1:<port>`). Any *outbound* network beyond the server (e.g. a cloud LLM
-fallback) must still originate in **Rust** on the server side, never the webview.
-
-## Rule for adding a feature
-
-1. **Logic** → a function in `skill-core` (keep it Tauri-free so `skill-server` builds).
-2. **HTTP route** → a match arm in `skill-server`'s `handle()` under `/api/<name>`.
-   **This is the API.** If you can't reach it from skill-server, it isn't done.
-3. **Frontend** → one function in `client/web/lib/api.ts` that calls `http(...)`. No
-   `invoke`, no `isTauri` branch.
-
-Extra constraints:
-- **Streaming** uses SSE (`request.into_writer()` + chunked `data:` frames — see
-  `stream_terminal`), consumed with `EventSource` in `api.ts`. It rides a plain socket and
-  an SSH tunnel alike. Don't design around a duplex channel.
-- **No native-only capabilities.** Picking files/folders goes through the server, not an OS
-  dialog: browse the (possibly remote) filesystem with `/api/list-dir` + the in-app
-  `FolderPicker`, import a `.zip` via a file-input upload (`/api/import-zip`), export via a
-  `/api/download` link. A native OS dialog can only see the *client* machine, so it breaks
-  the remote model — there is no `invoke`-only escape hatch.
-
-## Reference example: keyless commit messages
-
-- Logic: `server/skill-core/src/commitmsg.rs` (policy: diff prep, cache, post-process)
-  → `commit_agent.rs` (backend selector). The default backend shells out to a
-  coding-agent CLI the user is already logged into (Claude Code → Codex → Gemini,
-  keyless — no API key); the on-device `engine.rs` (llama.cpp) is an opt-in offline
-  backend (`SKILL_STUDIO_COMMIT_AGENT=llama`), no longer bundled.
-- HTTP: `POST /api/generate-commit-message`, `GET /api/commit-model-status`.
-- Frontend: `api.generateCommitMessage()` / `api.commitModelStatus()` over `http`.
-- Verified end-to-end through the HTTP path (skill-server) — the only path.
+- **Shell** (`app/AppShell.tsx`) globally mounts only: the `<Outlet>` (hidden via
+  `display:none` on `/terminals`, not unmounted), an always-mounted `TerminalsHost` (live ptys
+  survive nav), and `UpdateBanner`. No `StrictMode` (would double-attach pty/xterm). Only guard:
+  `useDiscardBlocker`, fires *only* after an autosave failure — no auth gate.
+- **Routes:** `/` Home · `/secrets` · `/mining` · `/terminals` (element `null`; UI is
+  `TerminalsHost`) · `/studio/:root` (children: index = SKILL.md form, `file/*` = file pane,
+  `commit/:sha` = worktree diff only) · `/markdown/:path` (standalone editor) · `*` → `/`.
+- **Studio** = full-height column: `TopBar` (**no Save button — autosave is wordless**; a
+  *version* is a git commit) → `PreviewBanner` (past-version only) → **Sidebar | center Outlet |
+  optional `AgentPanel`** (resizable Terminals). Sidebar = one `SplitStack`: `FileTree` +
+  `SourceControl` accordion (**New Changes** = working-tree + Save-version, also ⌘/Ctrl+S ·
+  **Versions** = history, click checks a version into the worktree · **Remote/GitHub**,
+  collapsed). Center = `SkillDocument`/`FilePane`/diff. Layout prefs are **global**
+  (`studioLayout.ts`), not per-skill. (The "Versions panel" below = `SourceControl.tsx`.)
+- **Design system** (`globals.css`): Tailwind v4, **no config** — CSS vars + `@theme inline`,
+  class-based dark (`.dark`, set pre-paint). **Two-axis palette: `--brand` (navy) = identity
+  only; `--accent` (teal) = all interaction.** Primitives: one `Modal`,
+  `btn{Primary,Ghost,Danger}` (one filled primary per row), `Badge` via `color-mix`,
+  `useConfirm` (`window.confirm` is a no-op in the `wry` webview). **Never render "altrina" in
+  UI**; app name is Title Case "Skill Studio".
 
 ## Skill versioning: tracked by default
 
-Every personal skill is its **own git repo** — one repo per skill, so each is versioned,
-diffed, rolled back, and synced to GitHub independently. Tracking is **automatic, not
-opt-in**: `GET /api/discover` runs `discover::discover_and_autotrack`, which hands every
-eligible skill to `gitops::auto_track_personal`. Off the request thread (the first run may
-init many repos), that `git init`s a repo and lands a baseline **"Initial version"** commit
-for each — discovery itself stays snappy.
+Each personal skill is its **own git repo** (versioned/diffed/rolled-back/synced
+independently). **Auto-tracked:** `GET /api/discover` → `discover_and_autotrack` →
+`gitops::auto_track_personal`, which off-thread `git init`s + lands a baseline **"Initial
+version"** commit (an unborn HEAD reads all-dirty and can't sync; with no git identity we stop
+at the empty repo and prompt on first manual save).
 
-- **Why init *and* a baseline commit, not just init.** An unborn HEAD is a dead state:
-  `git status` reports every file as untracked (the skill reads as all-dirty) and GitHub
-  sync needs ≥1 commit. The baseline keeps a fresh repo clean and immediately syncable.
-  With no git identity set we stop at the empty repo, and the Save-version flow surfaces the
-  identity prompt on the first manual save.
-- **Eligibility = personal, not a proposal, not already in a repo.** A `generated-skills/`
-  draft (still a proposal) and a skill already inside a parent repo (`project: Some`) are
-  both skipped — we never nest a `.git` inside someone's project repo. `auto_track_personal`
-  also cheaply skips roots that already have a `.git`. Secrets/junk never reach the baseline:
-  `ensure_exclude` seeds a local `.git/info/exclude` (never a committed `.gitignore`) before
-  the catch-all `git add -A`.
-- **Opt-out is sticky.** "Stop tracking" (`POST /api/git-untrack`) deletes the skill's own
-  `.git` *and* records its canonical path in a denylist
-  (`~/.config/skill-studio/untracked.json`); without that record the next discovery would
-  just re-create the repo. `auto_track_personal` skips every denylisted root, so a skill
-  stays untracked until "Start tracking" (`POST /api/git-track`) clears the denylist and
-  re-inits with a fresh baseline. Untrack is guarded — it refuses when a parent repo owns
-  the history, and only ever removes a `.git` whose top-level *is* the skill folder.
-- HTTP: `POST /api/git-track` / `/api/git-untrack` (the opt-in/out pair) and
-  `/api/git-commit` (the Save-version path; + `git-log`, `git-status`, `git-info`).
-  Frontend: `api.gitTrack` / `api.gitUntrack` / `api.gitCommit` in `client/web/lib/api.ts`,
-  surfaced in the Versions panel ([SourceControl.tsx](client/web/pages/studio/SourceControl.tsx)).
+- **Eligible = personal, not a `generated-skills/` proposal, not inside a parent repo** (never
+  nest `.git` in someone's project); already-`.git` roots are skipped. `ensure_exclude` seeds a
+  local `.git/info/exclude` (never a committed `.gitignore`) before `git add -A`.
+- **Opt-out is sticky:** `git-untrack` deletes the skill's `.git` and denylists its path
+  (`~/.config/skill-studio/untracked.json`) so discovery won't re-create it; `git-track` clears
+  it + re-baselines. Untrack refuses when a parent repo owns history.
+- Routes: `git-track`/`git-untrack`, `git-commit` (Save-version) + `git-log`/`git-status`/
+  `git-info`; surfaced in `SourceControl.tsx`.
 
 ## Dev workflows
 
@@ -115,137 +94,73 @@ for each — discovery itself stays snappy.
 | Native desktop | the shell spawns a loopback `skill-server` | `npm run tauri dev` | the native window |
 | Production / remote | `npm run build` then run skill-server | (served by skill-server) | skill-server's port (UI + API, one origin) |
 
-The Vite `/api` proxy lives in `vite.config.ts` (`server.proxy`, target overridable via
-`VITE_API_TARGET`). In `tauri dev` the desktop shell spawns its own loopback
-`skill-server` on `:8765` (the proxy target), so no separate backend is needed.
-
-The desktop runs the server **in-process** by calling `skill_server::spawn(ServerConfig)`
-([client/desktop/src/lib.rs](client/desktop/src/lib.rs)); `ServerConfig` already carries
-the `token` (bearer-auth) and `examples_base` seams the remote case will use.
+The Vite `/api` proxy (`vite.config.ts`, target via `VITE_API_TARGET`) defaults to `:8765`;
+`tauri dev` spawns its own loopback server there. Desktop runs the server in-process via
+`skill_server::spawn(ServerConfig)` (`client/desktop/src/lib.rs`); `ServerConfig` carries the
+bearer `token` + `examples_base`.
 
 ## Terminals: persistent by design
 
-Agent terminals are tmux sessions (`ass-*`); the backend is only a **bridge**
-(per-client `tmux attach` in a PTY). The lifetime policy, in order of intent:
+Agent terminals are tmux sessions (`ass-*`); the backend is only a **bridge** (`tmux attach`
+in a PTY).
 
-1. **A terminal outlives everything except an explicit kill.** Closing the
-   browser tab, quitting the desktop app, dropping an SSH connection, or
-   restarting/upgrading a backend never stops the agent running inside —
-   that's the point: kick off a long coding-agent run, come back from any
-   client later.
-2. **The `ass-*` namespace is machine-wide and deliberately unfiltered.** Every
-   backend lists/attaches/kills ALL studio sessions regardless of which process
-   created them, so any client of any backend can pick up any agent. Session
-   names embed the creating pid (`ass-<pid>-<secs>-<seq>`) only so two backends
-   can't mint colliding names; `@ass_owner_pid` is provenance metadata, not a
-   lifecycle key.
-3. **The only automatic reaping is a high-bar GC** (`skill_term::sweep_stale`,
-   run at backend startup): a session is collected only when it's unattached,
-   every pane is back at a plain shell (the agent *exited*), **and** it has
-   been idle for a week. A live agent or a watching client always blocks it.
-   Finished runs therefore stay reviewable, but dead shells can't pile up
-   forever.
+1. **A terminal outlives everything but an explicit kill** — closing a tab, quitting the app,
+   dropping SSH, or restarting/upgrading a backend never stops the agent inside.
+2. **The `ass-*` namespace is machine-wide, unfiltered:** every backend lists/attaches/kills all
+   studio sessions, so any client picks up any agent. The pid in `ass-<pid>-<secs>-<seq>` only
+   prevents name collisions; `@ass_owner_pid` is provenance, not a lifecycle key.
+3. **Only auto-reaping = a high-bar GC** (`sweep_stale`, at startup): collected only when
+   unattached **and** every pane is back at a plain shell **and** idle ≥1 week.
 
-Multiple backends on one machine are a supported state (desktop + standalone
-dev server, or a test instance on another port): they share the tmux namespace
-safely, and the on-device inference engine reaper only kills *orphaned*
-engines (reparented to init) — never a sibling backend's live child.
+Multiple backends per machine are supported (shared namespace); the inference-engine reaper
+kills only *orphaned* engines (reparented to init) — never a sibling's live child **on Unix**
+(the Windows fallback kills by image name and can hit a sibling, accepted for that rare case).
 
-## The agent interface (`skill-core/src/agents.rs`)
+## Agent registry (`skill-core/src/agents.rs`)
 
-Skill Studio is agent-agnostic: nothing outside the **agent registry** may
-match on a family name. Every supported agent CLI is one `AgentDef` entry
-declaring the shared properties an integration needs:
+Agent-agnostic: nothing outside the registry matches a family name. One `AgentDef` per CLI:
 
-- **skills_dirs / reads_shared** — where the agent discovers skills (its own
-  folders + the shared `~/.agents/skills` standard),
-- **launch** — how to start it on a task: the *interactive TUI* command line
-  with the initial prompt pre-submitted (claude: the positional prompt;
-  codex/cursor: the positional prompt; gemini: `-i`). An app-driven run is an
-  ordinary agent session — same harness semantics, approval prompts, and
-  lifetime as if the user had typed the prompt — and the prompt the user
-  previewed is the *whole* prompt the agent receives. The caller must bring
-  the user to the run's terminal, where first-run trust dialogs and approvals
-  are answered. (Headless modes were dropped deliberately: they diverge from
-  a real session — claude's `-p` ends the run the moment the agent ends its
-  turn and kills its background tasks.)
-- **resume** — how to reopen the run dir's most recent conversation as the
-  TUI after its terminal is gone (claude: `--continue`; codex:
-  `resume --last`; gemini: `--resume` — all cwd/project-scoped, which is why
-  each run gets a stable directory).
+- **skills_dirs / reads_shared** — where it discovers skills (own folders + the shared
+  `~/.agents/skills`).
+- **launch** — the *interactive TUI* with the prompt pre-submitted (claude/codex/cursor:
+  positional; gemini: `-i`; opencode: `--prompt`). An app-driven run is an ordinary session
+  (same approvals/lifetime; the previewed prompt is the *whole* prompt); the caller brings the
+  user to its terminal. (Headless modes dropped — claude `-p` ends the run at turn end.)
+- **resume** — reopen the run dir's latest conversation (claude/opencode: `--continue`; codex:
+  `resume --last`; gemini: `--resume` — all cwd-scoped, so each run gets a stable dir).
 
-Features consume capabilities, not names: mining starts `launch` in a
-terminal and navigates the user there ("running" = that TUI is still up; no
-completion sentinel — results surface via the skills scan and git dirty
-tracking), "continue the conversation" revives the conversation via `resume`
-on demand, terminal options carry a `canMine` flag (`agents::can_launch`),
-and the UI degrades when a capability is `None` — an agent with no
-prompt-submitting TUI launch simply isn't offered for mining runs, and one
-without a cwd-scoped resume (Cursor) just can't revive a closed
-conversation. **Supporting a new agent = filling in one entry**; if a
-capability can't be expressed from documented behavior, leave it `None`.
+Features consume capabilities, not names (mining = `launch` + navigate; "continue" = `resume`;
+`canMine` = `can_launch`); the UI degrades when a capability is `None` (no TUI launch → not
+offered for mining; no cwd-scoped resume, e.g. Cursor → can't revive). **New agent = one
+entry**; leave a capability `None` if undocumented.
 
-## The connection manager (VS Code "Remote - SSH")
+## Connection manager (VS Code "Remote - SSH")
 
-Implemented as a **local proxy switchboard** — the realization of "local is just remote
-where the host is localhost." The webview NEVER changes origin; the server it talks to
-becomes a switchboard:
+A **local proxy switchboard**; the webview never changes origin.
 
-- `/api/remote/{list,connect,disconnect,status,last}` is the **connection manager**, always
-  handled locally. The impl is `SshRemoteControl` in
-  [server/skill-server/src/sshmgr/](server/skill-server/src/sshmgr/) (a `RemoteControl`
-  trait object on `ServerConfig`); it shells out to the system `ssh`, or — for a local
-  WSL/WSL2 distro on Windows (`wsl:<distro>` targets, surfaced only when `wsl.exe` lists
-  one) — to `wsl.exe`. A `Transport` enum in `sshmgr/ssh.rs` abstracts the two; everything
-  downstream (provisioning, launch) is identical because a WSL distro is just Linux.
+- `/api/remote/{list,connect,disconnect,status,last}` is **always local** (`SshRemoteControl`,
+  `server/skill-server/src/sshmgr/`); shells out to `ssh`, or `wsl.exe` for `wsl:<distro>`
+  targets. A `Transport` enum abstracts the two (a WSL distro is just Linux).
 - While connected, **every other `/api/*` (incl. the `/api/terminal/attach` SSE) is
-  reverse-proxied** to the remote `skill-server` over the `ssh -L` tunnel
-  ([proxy.rs](server/skill-server/src/proxy.rs)), with the bearer token injected on the
-  upstream side. So `client/web` is unchanged by remoting, and **the token never reaches
-  the browser** — which dissolves the old `EventSource`-can't-send-`Authorization`
-  problem entirely (the proxy adds the header; the browser only ever talks same-origin).
-- Non-`/api` GETs always serve the local UI, so the remote binary need not serve it.
-
-The connect flow (VS Code-style): list targets (`~/.ssh/config` aliases + any WSL distros)
-→ detect remote arch (`uname`) → ensure a version-pinned static-musl `skill-server` is
-installed (remote `curl`/`wget`, or a local-download piped over the transport;
-checksum-verified) → launch it loopback-bound with a token delivered via env (off the
-process table) → ONE transport child is both the tunnel and the lifeline (its held stdin
-EOFs the remote on disconnect/crash, so no orphan; a monitor clears the session if it
-dies). For ssh the tunnel is `ssh -L`; for WSL there's no `-L` — the distro's loopback is
-shared with Windows (WSL2 `localhostForwarding`/WSL1's shared stack), so the server listens
-on the very port the proxy connects to. WSL scripts are base64-wrapped to stay clear of
-`wsl.exe` command-line quoting. On reaching "connected" the SPA reloads, so the whole
-window rebinds to the remote. Terminals are tmux-backed, so sessions survive reconnects.
-
-**Resume + recents (VS Code-style).** The last successfully-connected host is remembered
-on the *connecting* machine (`/api/remote/last`, persisted by `sshmgr/lastconn.rs`); on
-launch the client auto-reconnects to it through the normal connect path, and an explicit
-disconnect (`disconnect(forget=true)`) clears it so the next launch starts Local — app-exit
-teardown keeps it. Recently-opened skills (`/api/recents`, [skill-core/src/recents.rs](server/skill-core/src/recents.rs))
-are a *normal* proxied route, not a locally-handled one, so — unlike the connection manager —
-they follow the active server: a machine's recents are the same whether reached locally or over SSH.
-
-**Same code in every server.** The manager lives server-side, so a `skill-server`
-exposes it whether it runs **in-process in the desktop** or **standalone** (browser-local
-dev, or a dev box) — there's no browser-vs-desktop divergence. Two safety gates keep it
-off where it shouldn't broker: a *provisioned remote* (launched `--lifeline-stdin`) and a
-*non-loopback* bind both leave `ServerConfig::remote = None`.
-
-Provisioning downloads the matching `skill-server-<target>` from the GitHub release whose
-tag matches the app version (CI builds static-musl + macOS binaries — see
-[.github/workflows/release.yml](.github/workflows/release.yml)). Override the source with
-`SKILL_STUDIO_SERVER_BASE_URL` / `SKILL_STUDIO_SERVER_VERSION`.
+  reverse-proxied** to the remote (`proxy.rs`) with the bearer token injected upstream — **so
+  the token never reaches the browser**. Also pinned local: `/api/update/*` and
+  `/api/client-log`. Non-`/api` GETs serve the local UI.
+- **Connect flow:** list targets (`~/.ssh/config` + WSL distros) → detect arch (`uname`) →
+  ensure a version-pinned static-musl `skill-server` (checksum-verified) → launch loopback-bound
+  with a token via env → one transport child is both tunnel and lifeline (held stdin EOFs the
+  remote on disconnect/crash). ssh uses `ssh -L`; WSL shares Windows loopback (no `-L`). On
+  "connected" the SPA reloads; tmux terminals survive reconnects.
+- **Resume/recents:** the last host is remembered on the connecting machine (`/api/remote/last`,
+  `sshmgr/lastconn.rs`) and auto-reconnected; `disconnect(forget=true)` clears it. Recents
+  (`/api/recents`) are a *normal proxied* route, so they follow the active server.
+- **Same code everywhere;** two gates keep it from brokering where it shouldn't: a provisioned
+  remote (`--lifeline-stdin`) and a non-loopback bind both leave `ServerConfig::remote = None`.
+  Provisioning pulls `skill-server-<target>` from the GitHub release matching the app version
+  (override via `SKILL_STUDIO_SERVER_BASE_URL` / `_VERSION`).
 
 ## Roadmap
 
-- **Kill Rust↔TS wire-type drift:** generate the `api.ts` DTOs from the serde structs (`ts-rs`) + a CI drift-check.
-- **Skill-usage feedback loop (mining, next stage).** The skill-miner parsers already
-  extract `skills_used` per session (with `[skill used: X]` markers interleaved in the
-  condensed transcript), and the distill stage summarizes each session's explicit user
-  feedback in natural language. Once mining runs recurrently, later runs can close the
-  loop on previously accepted skills: report "this skill triggered N times since you
-  accepted it / never triggered" and feed feedback about a skill falling short back as
-  improvement candidates. Undertriggering is the compounding risk — a skill that never
-  fires can't gather feedback or improve — so surfacing trigger counts is the first
-  health metric worth shipping.
+- **Kill Rust↔TS wire drift:** generate `api.ts` DTOs from serde structs (`ts-rs`) + a CI check.
+- **Skill-usage feedback loop (mining):** the miner already extracts `skills_used` + distills
+  user feedback; recurrent runs can report "skill triggered N times / never since accepted" and
+  feed shortfalls back as improvements (undertriggering is the compounding risk).
