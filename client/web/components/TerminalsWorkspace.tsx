@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import NavBar from "@/components/NavBar";
 import NewTerminalDialog from "@/components/NewTerminalDialog";
@@ -31,6 +31,9 @@ function readSeen(): Record<string, number> {
     return {};
   }
 }
+
+/** Wall-clock seconds, to compare against tmux activity timestamps. */
+const nowSecs = () => Math.floor(Date.now() / 1000);
 
 /**
  * Stable, chronological order (oldest first) so the rail never reshuffles.
@@ -95,11 +98,17 @@ export default function TerminalsWorkspace({
   const location = useLocation();
   const navigate = useNavigate();
 
-  // Unread tracking: a background terminal earns a dot when its tmux activity
-  // is newer than the last time it was viewed. The client only streams the
-  // active terminal, so the activity timestamp (from the server) is the only
-  // signal we have for what the other sessions are doing.
-  const seenRef = useRef<Record<string, number>>(readSeen());
+  // Unread dot. A background session's tmux `activity` (window_activity) is the
+  // only signal we have for it — but it bumps on *any* pane repaint, including the
+  // redraw that attaching/resizing a terminal triggers. So "new" can't mean
+  // "activity since the last poll": a quick visit repaints the pane and would then
+  // leave a phantom dot behind. It means "activity since you last *viewed* it" — we
+  // stamp a session seen = now the instant you switch away from it (below), which
+  // covers both what you watched and the repaint your own attach caused.
+  const [seen, setSeen] = useState<Record<string, number>>(readSeen);
+  const markSeen = useCallback((id: string | null) => {
+    if (id) setSeen((prev) => ({ ...prev, [id]: nowSecs() }));
+  }, []);
   const unread = useCallback(
     (s: TermSession) => {
       if (s.id === activeId) return false; // the one you're watching is never "new"
@@ -107,10 +116,29 @@ export default function TerminalsWorkspace({
       // Unseen sessions fall back to their own activity (i.e. start seen), so a
       // reconnect doesn't light up every running terminal at once — they only
       // dot on activity that arrives *after* we first list them.
-      return act > (seenRef.current[s.id] ?? act);
+      return act > (seen[s.id] ?? act);
     },
-    [activeId],
+    [activeId, seen],
   );
+
+  // Freeze the terminal you're leaving at "now" — synchronously, before paint, so
+  // switching away never flashes a dot on the pane you were just watching (its
+  // attach repaint bumped `activity` above the last poll's snapshot). A plain
+  // effect would let one painted frame through with the stale mark.
+  const prevActiveRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const prev = prevActiveRef.current;
+    if (prev && prev !== activeId) markSeen(prev);
+    prevActiveRef.current = activeId;
+  }, [activeId, markSeen]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SEEN_KEY, JSON.stringify(seen));
+    } catch {
+      /* ignore */
+    }
+  }, [seen]);
 
   const refresh = useCallback(async () => {
     try {
@@ -124,25 +152,22 @@ export default function TerminalsWorkspace({
     }
   }, []);
 
-  // Keep the unread marks in step with each poll: seed newly-listed sessions,
-  // keep the active one current (so watching a chatty terminal never leaves a
-  // stale dot once you switch away), and drop marks for sessions that are gone.
+  // Seed a "seen" mark for each newly-listed session (start it seen = its own
+  // activity, so a reconnect doesn't light up every running terminal at once) and
+  // drop marks for sessions that are gone. Sessions you've actually viewed keep the
+  // stamp markSeen gave them; this only fills gaps and prunes.
   useEffect(() => {
     if (sessions.length === 0) return;
-    // Rebuilding from the live list also prunes marks for sessions that are gone.
-    const next: Record<string, number> = {};
-    for (const s of sessions) {
-      const act = Number(s.activity) || 0;
-      const prev = seenRef.current[s.id];
-      next[s.id] = prev == null || s.id === activeId ? act : prev;
-    }
-    seenRef.current = next;
-    try {
-      localStorage.setItem(SEEN_KEY, JSON.stringify(next));
-    } catch {
-      /* ignore */
-    }
-  }, [sessions, activeId]);
+    setSeen((prev) => {
+      const next: Record<string, number> = {};
+      let changed = Object.keys(prev).length !== sessions.length;
+      for (const s of sessions) {
+        if (prev[s.id] == null) changed = true;
+        next[s.id] = prev[s.id] ?? (Number(s.activity) || 0);
+      }
+      return changed ? next : prev;
+    });
+  }, [sessions]);
 
   useEffect(() => {
     void refresh();

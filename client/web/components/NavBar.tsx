@@ -29,8 +29,8 @@ function KeyIcon() {
 function StudioIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
-      <path d="M14 3v6h6" />
+      <path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+      <path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z" />
     </svg>
   );
 }
@@ -80,9 +80,9 @@ export default function NavBar({
   breadcrumb?: ReactNode;
   children?: ReactNode;
   /** Categories 2↔3 overlap (see header): a page that projects the Terminal
-   *  destination inline (Studio's side panel) overrides the link to toggle that
-   *  projection instead of navigating; the full Terminal page stays reachable from
-   *  the projection (its expand button). Future-clean: move this toggle to page chrome. */
+   *  destination inline (Studio's side panel) overrides the link to OPEN that
+   *  projection; once it's open the link falls through to navigating to the full
+   *  Terminal page. Future-clean: move the projection toggle to page chrome. */
   onTerminals?: () => void;
   terminalsOpen?: boolean;
 }) {
@@ -96,6 +96,12 @@ export default function NavBar({
   const studioSeg = pathname.startsWith("/studio/") ? pathname.split("/")[2] : null;
   const lastSkill = recents.find((r) => r.kind !== "markdown");
   const studioTarget = studioSeg ? `/studio/${studioSeg}` : lastSkill ? studioPath(lastSkill.root) : "/";
+
+  // Terminal is a first-class destination; the Studio side panel is just its inline
+  // projection. So in Studio the link opens that projection, and once it's open a
+  // second click navigates to the full Terminal page (closing the panel is the
+  // panel's own control). Everywhere else the link just navigates.
+  const onTerminalsClick = onTerminals && !terminalsOpen ? onTerminals : () => navigate("/terminals");
 
   const brand = (
     <span className="flex items-center gap-1.5 text-brand">
@@ -128,7 +134,8 @@ export default function NavBar({
         {children && <span className="mx-1 h-5 w-px bg-border" aria-hidden />}
         {/* (3) destinations — the persistent "pages" cluster, identical on every page.
             Studio has no singleton route (per-skill), so it points at the current/last skill
-            (else Home); in Studio the Terminal link toggles its projection (see onTerminals). */}
+            (else Home); in Studio the Terminal link opens its projection, then navigates to
+            the full page once it's open (see onTerminals). */}
         <NavLink
           icon={<StudioIcon />}
           label="Studio"
@@ -139,7 +146,7 @@ export default function NavBar({
           icon={<TerminalIcon />}
           label="Terminals"
           active={onTerminals ? !!terminalsOpen : pathname === "/terminals"}
-          onClick={onTerminals ?? (() => navigate("/terminals"))}
+          onClick={onTerminalsClick}
         />
         <NavLink icon={<KeyIcon />} label="Secrets" active={pathname === "/secrets"} onClick={() => navigate(secretsPath())} />
         <span className="mx-1 h-5 w-px bg-border" aria-hidden />
