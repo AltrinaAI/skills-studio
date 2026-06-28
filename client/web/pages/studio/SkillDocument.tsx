@@ -3,9 +3,11 @@
 import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useAutosave } from "@/components/useAutosave";
+import { useExternalFileSync } from "@/components/useExternalFileSync";
 import { useStudio } from "./StudioContext";
 import { agentColor, agentForPath, skillKind } from "@/lib/agents";
 import * as api from "@/lib/api";
+import { btnGhost, btnPrimary } from "@/components/ui";
 import {
   parseSkillMd,
   serializeSkillMd,
@@ -16,7 +18,7 @@ import {
   type SkillFrontmatter,
   type ValidationIssue,
 } from "@/lib/skill";
-import type { SkillData } from "@/lib/types";
+import type { SkillData, FileData } from "@/lib/types";
 import { wordDiff } from "@/lib/wordDiff";
 
 const LiveEditor = lazy(() => import("@/components/LiveEditor"));
@@ -222,6 +224,8 @@ export default function SkillDocument({ data, onSaved }: { data: SkillData; onSa
   const [meta, setMeta] = useState<MetaRow[]>(() => metaRowsOf(fm));
   const [body, setBody] = useState(data.body);
 
+  const { gitVersion, preview, refreshData, reload } = useStudio();
+
   const propCount = [license, compatibility, allowedTools].filter(Boolean).length + meta.length;
   const [showProps, setShowProps] = useState(false);
 
@@ -238,16 +242,72 @@ export default function SkillDocument({ data, onSaved }: { data: SkillData; onSa
   );
   const nameError = issues.find((i) => i.field === "name" && i.level === "error");
 
-  const save = useCallback(async () => {
-    await api.saveSkillMd(data.root, frontmatter, body);
-  }, [data.root, frontmatter, body]);
-  useAutosave(serialized, save, true, onSaved);
+  // --- Conflict-safe writes + show-latest for SKILL.md ---
+  // `etagRef` = fingerprint of the version we loaded (the skill load doesn't carry
+  // one, so a cheap read on mount establishes it), advanced on every write. A write
+  // that finds disk newer is refused server-side and surfaces as `conflict` instead
+  // of clobbering an external edit.
+  const etagRef = useRef<string | undefined>(undefined);
+  const mountedRef = useRef(true);
+  useEffect(() => () => void (mountedRef.current = false), []);
+  const [conflict, setConflict] = useState<{ diskContent: string; diskEtag: string } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api
+      .readFile(data.root, "SKILL.md")
+      .then((f) => {
+        if (alive && f.etag) etagRef.current = f.etag;
+      })
+      .catch(() => {});
+    return () => void (alive = false);
+  }, [data.root]);
+
+  const save = useCallback(
+    async (value: string) => {
+      const res = await api.writeFile(data.root, "SKILL.md", value, etagRef.current);
+      if (res.status === "written") {
+        etagRef.current = res.etag;
+        return;
+      }
+      if (mountedRef.current) setConflict({ diskContent: res.diskContent, diskEtag: res.diskEtag });
+      throw new Error("SKILL.md changed on disk — your edits aren’t saved yet.");
+    },
+    [data.root],
+  );
+  const { dirty, save: retrySave } = useAutosave(serialized, save, true, onSaved);
+
+  // Show-latest: poll for external writes to SKILL.md. With no unsaved edits, reload
+  // the skill so the form + body reflect the latest; with unsaved edits, surface a
+  // conflict (don't clobber). `dirtyRef` keeps the poll's view of unsaved-ness fresh.
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  const onExternalChange = useCallback(
+    (fresh: FileData) => {
+      if (!fresh.etag) return;
+      if (dirtyRef.current) setConflict({ diskContent: fresh.content ?? "", diskEtag: fresh.etag });
+      else {
+        etagRef.current = fresh.etag;
+        reload(true); // re-read the skill → remounts the form + body with the latest
+      }
+    },
+    [reload],
+  );
+  useExternalFileSync(data.root, "SKILL.md", true, () => etagRef.current, onExternalChange);
+
+  const useDiskVersion = useCallback(() => {
+    setConflict(null);
+    reload(true); // re-read SKILL.md from disk, discarding the unsaved form edits
+  }, [reload]);
+  const keepMyVersion = useCallback(() => {
+    if (conflict) etagRef.current = conflict.diskEtag; // CAS passes → my version wins
+    setConflict(null);
+    retrySave();
+  }, [conflict, retrySave]);
 
   // --- Review mode: diff the BODY against its HEAD version. The on-disk file
   // carries the frontmatter too, so we parse HEAD's SKILL.md and diff body-only
   // (frontmatter edits live in the form above, not the prose overlay). The
   // "Review changes" toggle lives in the nav bar; this reacts to ?diff=worktree. ---
-  const { gitVersion, preview, refreshData } = useStudio();
   const [searchParams] = useSearchParams();
   const reviewRequested = searchParams.get("diff") === "worktree";
   // Reviewing a past version diffs it against its parent (HEAD^ — HEAD is detached
@@ -304,6 +364,20 @@ export default function SkillDocument({ data, onSaved }: { data: SkillData; onSa
 
   return (
     <div className="mx-auto max-w-184 px-6 py-10 sm:px-10">
+      {conflict && (
+        <div className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-danger/40 bg-danger/5 px-3 py-2 text-xs">
+          <span className="font-medium text-fg">SKILL.md changed on disk since you opened it.</span>
+          <span className="text-muted">Your unsaved edits weren’t overwritten.</span>
+          <span className="ml-auto flex gap-2">
+            <button className={btnGhost} onClick={useDiskVersion}>
+              Use disk version
+            </button>
+            <button className={btnPrimary} onClick={keepMyVersion}>
+              Keep my changes
+            </button>
+          </span>
+        </div>
+      )}
       <div className="mb-7 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
         <ValidationPill issues={issues} />
         <SkillMeta root={data.root} />

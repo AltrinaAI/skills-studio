@@ -64,8 +64,25 @@ const readSkillRaw = (path: string) => http<RawSkill>("POST", "read-skill", { pa
 
 export const readFile = (root: string, rel: string) => http<FileData>("POST", "read-file", { root, rel });
 
-export const writeFile = (root: string, rel: string, content: string) =>
-  http<void>("POST", "write-file", { root, rel, content });
+/** Cheap metadata stat (mtime + size) for the show-latest poll — no read/hash. */
+export interface FileStat {
+  mtimeMs: number;
+  size: number;
+}
+export const statFile = (root: string, rel: string) => http<FileStat>("POST", "stat-file", { root, rel });
+
+/** Outcome of a write. `written` carries the new baseline tag; `stale` means disk
+ *  advanced past `expectedEtag` (an external process wrote the file) — the write was
+ *  REFUSED and the current disk bytes come back for the caller to reconcile. */
+export type WriteOutcome =
+  | { status: "written"; etag: string }
+  | { status: "stale"; diskEtag: string; diskContent: string };
+
+/** Write a file. Pass `expectedEtag` (the tag from the last read/write) to make it a
+ *  compare-and-swap that never clobbers a newer disk version; omit it for an
+ *  unconditional overwrite. */
+export const writeFile = (root: string, rel: string, content: string, expectedEtag?: string) =>
+  http<WriteOutcome>("POST", "write-file", { root, rel, content, expectedEtag });
 
 /** Delete a file or folder inside the skill (folders recurse). SKILL.md and the
  *  skill root are protected server-side. Destructive — confirm before calling. */

@@ -187,6 +187,15 @@ export function useAutosave(
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [error]);
 
+  // Adopt `v` as the on-disk baseline WITHOUT writing — used when the host swaps in
+  // an externally-changed version it just read from disk, so autosave sees a clean
+  // buffer instead of trying to write that just-read content straight back.
+  const markClean = useCallback((v: string) => {
+    setSavedValue(v);
+    savedRef.current = v;
+    setError(null);
+  }, []);
+
   const status: SaveStatus = error ? "error" : saving ? "saving" : dirty ? "dirty" : "saved";
-  return { status, dirty, saving, error, save: runSave };
+  return { status, dirty, saving, error, save: runSave, markClean };
 }

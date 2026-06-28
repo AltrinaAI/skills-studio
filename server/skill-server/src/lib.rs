@@ -603,8 +603,12 @@ fn handle(method: &Method, url: &str, body: &str, ctx: &ServerCtx) -> Reply {
             json_reply(skill::build_raw_skill(&root))
         }
         (Method::Post, "/api/read-file") => json_reply(skill::read_file_impl(&s("root"), &s("rel"))),
+        (Method::Post, "/api/stat-file") => json_reply(skill::stat_file_impl(&s("root"), &s("rel"))),
         (Method::Post, "/api/write-file") => {
-            json_reply(skill::write_file_impl(&s("root"), &s("rel"), &s("content")).map(|_| json!({ "ok": true })))
+            // `expectedEtag` (the tag the editor loaded) turns this into a
+            // compare-and-swap; absent → legacy unconditional overwrite.
+            let expected = v.get("expectedEtag").and_then(|x| x.as_str()).filter(|s| !s.is_empty());
+            json_reply(skill::write_file_impl(&s("root"), &s("rel"), &s("content"), expected))
         }
         (Method::Post, "/api/delete-file") => {
             json_reply(skill::delete_path_impl(&s("root"), &s("rel")).map(|_| json!({ "ok": true })))

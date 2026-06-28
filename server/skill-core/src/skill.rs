@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use zip::write::SimpleFileOptions;
 
 use crate::filetypes;
@@ -59,12 +60,58 @@ pub struct FileView {
     language: String,
     label: String,
     size: u64,
+    /// Content fingerprint the editor echoes back on write so the server can refuse
+    /// to overwrite a version newer than the one it loaded. Absent for images /
+    /// too-large files (not edited through the text path).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    etag: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     too_large: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     is_binary: Option<bool>,
+}
+
+/// Short content fingerprint (first 8 bytes of sha256, hex) used as an optimistic-
+/// concurrency tag: read returns it, write echoes it back, and the server refuses a
+/// write whose tag no longer matches what's on disk. 64 bits is ample to detect an
+/// intervening external edit; kept short to stay cheap on the wire.
+fn etag_of(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut s = String::with_capacity(16);
+    for b in &digest[..8] {
+        use std::fmt::Write as _;
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
+/// Result of [`write_file_impl`]. `Written` carries the new tag the editor adopts as
+/// its baseline; `Stale` means disk advanced past the tag the editor sent — the
+/// write was refused and the caller gets the current disk bytes to reconcile.
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum WriteOutcome {
+    Written {
+        etag: String,
+    },
+    Stale {
+        #[serde(rename = "diskEtag")]
+        disk_etag: String,
+        #[serde(rename = "diskContent")]
+        disk_content: String,
+    },
+}
+
+/// Cheap change signal for the editor's show-latest poll: modified-time + size,
+/// metadata only (no file read or hash). A move in either is the gate for a full
+/// re-read; tiny on the wire, so it's fine to poll over the remote tunnel.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileStat {
+    mtime_ms: u64,
+    size: u64,
 }
 
 #[derive(Serialize)]
@@ -258,6 +305,7 @@ pub fn read_file_impl(root: &str, rel: &str) -> Result<FileView, String> {
         language: language.into(),
         label: label.into(),
         size,
+        etag: None,
         content: None,
         too_large: None,
         is_binary: None,
@@ -271,6 +319,7 @@ pub fn read_file_impl(root: &str, rel: &str) -> Result<FileView, String> {
         return Ok(view);
     }
     let bytes = std::fs::read(&abs).map_err(|e| e.to_string())?;
+    view.etag = Some(etag_of(&bytes));
     if !filetypes::is_textual(&name) && bytes.contains(&0u8) {
         view.is_binary = Some(true);
         view.category = "binary".into();
@@ -280,14 +329,52 @@ pub fn read_file_impl(root: &str, rel: &str) -> Result<FileView, String> {
     Ok(view)
 }
 
-pub fn write_file_impl(root: &str, rel: &str, content: &str) -> Result<(), String> {
+/// Stat a file for the show-latest poll: modified-time (ms since epoch, 0 if the
+/// platform won't report it) + size, without reading or hashing the contents.
+pub fn stat_file_impl(root: &str, rel: &str) -> Result<FileStat, String> {
+    let root_path = PathBuf::from(root);
+    let abs = resolve_within_real(&root_path, rel, true)?;
+    let meta = std::fs::metadata(&abs).map_err(|e| e.to_string())?;
+    let mtime_ms = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    Ok(FileStat { mtime_ms, size: meta.len() })
+}
+
+/// Write `content` to `rel`. When `expected_etag` is set this is a compare-and-swap:
+/// if the file on disk no longer matches that tag — an external process (an agent,
+/// git, an editor) wrote it since we loaded it — the write is REFUSED and the current
+/// disk bytes come back as [`WriteOutcome::Stale`] for the caller to reconcile,
+/// honoring "never overwrite a disk version newer than the one you loaded." A `None`
+/// tag keeps the legacy unconditional overwrite (callers not yet tracking a baseline).
+/// An absent file is not a conflict — the write recreates it.
+pub fn write_file_impl(
+    root: &str,
+    rel: &str,
+    content: &str,
+    expected_etag: Option<&str>,
+) -> Result<WriteOutcome, String> {
     let root_path = PathBuf::from(root);
     let abs = resolve_within_real(&root_path, rel, false)?;
+    if let Some(expected) = expected_etag {
+        if let Ok(disk) = std::fs::read(&abs) {
+            let disk_etag = etag_of(&disk);
+            if disk_etag != expected {
+                return Ok(WriteOutcome::Stale {
+                    disk_etag,
+                    disk_content: String::from_utf8_lossy(&disk).into_owned(),
+                });
+            }
+        }
+    }
     if let Some(parent) = abs.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     std::fs::write(&abs, content).map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(WriteOutcome::Written { etag: etag_of(content.as_bytes()) })
 }
 
 /// Reduce a client/clipboard-supplied filename to a safe `(stem, ext)`: drop any
@@ -755,5 +842,65 @@ mod tests {
         assert!(write_asset_impl(&root, "assets", "x.png", "").is_err());
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn write_file_compare_and_swap() {
+        let base = std::env::temp_dir().join(format!("ass_cas_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let root = base.to_string_lossy().to_string();
+        std::fs::write(base.join("note.md"), "hello").unwrap();
+
+        // Read hands back the tag the editor will echo on write.
+        let view = read_file_impl(&root, "note.md").unwrap();
+        let etag = view.etag.clone().expect("text file gets an etag");
+        assert_eq!(view.content.as_deref(), Some("hello"));
+
+        // A CAS write with the matching tag lands and returns the new tag.
+        match write_file_impl(&root, "note.md", "hello world", Some(&etag)).unwrap() {
+            WriteOutcome::Written { etag: new } => assert_ne!(new, etag),
+            WriteOutcome::Stale { .. } => panic!("matching tag should not be stale"),
+        }
+        assert_eq!(std::fs::read_to_string(base.join("note.md")).unwrap(), "hello world");
+
+        // An external process edits the file behind our back...
+        std::fs::write(base.join("note.md"), "EXTERNAL EDIT").unwrap();
+        // ...so a CAS write with the now-stale tag is refused, not clobbered, and
+        // returns the current disk bytes for the caller to reconcile.
+        match write_file_impl(&root, "note.md", "my unsaved edits", Some(&etag)).unwrap() {
+            WriteOutcome::Stale { disk_content, disk_etag } => {
+                assert_eq!(disk_content, "EXTERNAL EDIT");
+                assert!(!disk_etag.is_empty());
+            }
+            WriteOutcome::Written { .. } => panic!("stale tag must not overwrite a newer disk version"),
+        }
+        assert_eq!(std::fs::read_to_string(base.join("note.md")).unwrap(), "EXTERNAL EDIT");
+
+        // No expected tag = legacy unconditional overwrite (back-compat path).
+        assert!(matches!(
+            write_file_impl(&root, "note.md", "forced", None).unwrap(),
+            WriteOutcome::Written { .. }
+        ));
+        assert_eq!(std::fs::read_to_string(base.join("note.md")).unwrap(), "forced");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn write_outcome_json_shape() {
+        // The client reads these exact keys — lock the wire contract.
+        let written = serde_json::to_value(WriteOutcome::Written { etag: "abc".into() }).unwrap();
+        assert_eq!(written, serde_json::json!({ "status": "written", "etag": "abc" }));
+
+        let stale = serde_json::to_value(WriteOutcome::Stale {
+            disk_etag: "def".into(),
+            disk_content: "on disk".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            stale,
+            serde_json::json!({ "status": "stale", "diskEtag": "def", "diskContent": "on disk" })
+        );
     }
 }

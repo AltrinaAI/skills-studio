@@ -45,6 +45,9 @@ export interface FileData {
   language: string;
   label: string;
   size: number;
+  /** Content fingerprint at load time; echoed back on write so the server can
+   *  refuse to overwrite a newer disk version. Absent for images/too-large files. */
+  etag?: string;
   content?: string;
   truncated?: boolean;
   tooLarge?: boolean;

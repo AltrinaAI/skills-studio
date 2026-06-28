@@ -3,11 +3,13 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useAutosave } from "@/components/useAutosave";
+import { useExternalFileSync } from "@/components/useExternalFileSync";
 import { useStudio } from "./StudioContext";
 import DiffView from "./DiffView";
 import { skillKind } from "@/lib/agents";
 import { humanSize } from "@/lib/fileTypes";
 import * as api from "@/lib/api";
+import { btnGhost, btnPrimary } from "@/components/ui";
 import type { FileData } from "@/lib/types";
 
 const LiveEditor = lazy(() => import("@/components/LiveEditor"));
@@ -20,6 +22,19 @@ export default function FilePane({ root, file, onSaved }: { root: string; file: 
   // etc.) review via a plain read-only unified diff instead.
   const isMarkdown = file.category === "markdown";
   const [content, setContent] = useState(file.content ?? "");
+
+  // --- Conflict-safe writes (compare-and-swap against disk) ---
+  // `etagRef` = fingerprint of the version we loaded, advanced on every successful
+  // write; `diskRef` = what we believe is on disk now (the "clean" baseline for
+  // show-latest). A write that finds disk newer than `etagRef` is refused
+  // server-side and surfaces as `conflict` instead of clobbering. Refs init per
+  // mount, and FilePane remounts per file, so they reset cleanly.
+  const etagRef = useRef(file.etag);
+  const diskRef = useRef(file.content ?? "");
+  const mountedRef = useRef(true);
+  useEffect(() => () => void (mountedRef.current = false), []);
+  const [conflict, setConflict] = useState<{ diskContent: string; diskEtag: string } | null>(null);
+
   const baseName = file.rel.split("/").pop() ?? file.rel;
   // The file's folder within the skill, against which its relative image paths
   // resolve ("." when it sits at the skill root).
@@ -101,17 +116,80 @@ export default function FilePane({ root, file, onSaved }: { root: string; file: 
       .catch(() => myReq === reqRef.current && setBaseline(undefined));
   }, [codeReview, editable, root, file.rel, gitVersion, baseRev, preview]);
 
-  const save = useCallback(async () => {
-    await api.writeFile(root, file.rel, content);
-  }, [root, file.rel, content]);
+  const save = useCallback(
+    async (value: string) => {
+      const res = await api.writeFile(root, file.rel, value, etagRef.current);
+      if (res.status === "written") {
+        etagRef.current = res.etag;
+        diskRef.current = value; // disk now holds what we just wrote
+        return;
+      }
+      // Disk advanced under us (an agent, git, an editor wrote the file). Don't
+      // overwrite it; surface the divergence and keep the user's edits intact.
+      if (mountedRef.current) setConflict({ diskContent: res.diskContent, diskEtag: res.diskEtag });
+      throw new Error("This file changed on disk — your edits aren’t saved yet.");
+    },
+    [root, file.rel],
+  );
 
-  useAutosave(content, save, editable, onSaved);
+  const { save: retrySave, markClean } = useAutosave(content, save, editable, onSaved);
+
+  // Show-latest: a stat poll (+ window focus) detects external writes while the file
+  // is open. A CLEAN buffer is swapped to the latest in place (cursor preserved) and
+  // adopted as the new baseline so it isn't written back; a DIRTY buffer surfaces a
+  // conflict instead of being disturbed.
+  const onExternalChange = useCallback(
+    (fresh: FileData) => {
+      if (fresh.content == null || !fresh.etag) return;
+      if (content === diskRef.current) {
+        etagRef.current = fresh.etag;
+        diskRef.current = fresh.content;
+        setContent(fresh.content);
+        markClean(fresh.content);
+      } else {
+        setConflict({ diskContent: fresh.content, diskEtag: fresh.etag });
+      }
+    },
+    [content, markClean],
+  );
+  useExternalFileSync(root, file.rel, editable, () => etagRef.current, onExternalChange);
+
+  // Resolve a detected conflict. "Use disk" swaps the buffer to the disk version
+  // (autosave then writes it straight back — a no-op); "Keep mine" adopts the disk
+  // tag so the retried compare-and-swap passes and the user's version wins.
+  const useDiskVersion = useCallback(() => {
+    if (!conflict) return;
+    etagRef.current = conflict.diskEtag;
+    diskRef.current = conflict.diskContent;
+    setContent(conflict.diskContent);
+    setConflict(null);
+  }, [conflict]);
+  const keepMyVersion = useCallback(() => {
+    if (!conflict) return;
+    etagRef.current = conflict.diskEtag;
+    setConflict(null);
+    retrySave();
+  }, [conflict, retrySave]);
 
   const inDiff = reviewRequested && isMarkdown && baseline !== undefined; // markdown overlay active
   const isNewFile = inDiff && baseline === "";
 
   return (
     <div className="mx-auto max-w-208 px-6 py-8 sm:px-10">
+      {conflict && (
+        <div className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-danger/40 bg-danger/5 px-3 py-2 text-xs">
+          <span className="font-medium text-fg">This file changed on disk since you opened it.</span>
+          <span className="text-muted">Your unsaved edits weren’t overwritten.</span>
+          <span className="ml-auto flex gap-2">
+            <button className={btnGhost} onClick={useDiskVersion}>
+              Use disk version
+            </button>
+            <button className={btnPrimary} onClick={keepMyVersion}>
+              Keep my changes
+            </button>
+          </span>
+        </div>
+      )}
       {inDiff && (
         <div className="mb-5 rounded-md border border-accent/30 bg-accent-soft px-3 py-2 text-xs text-muted">
           {isNewFile ? (

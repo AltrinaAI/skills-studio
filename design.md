@@ -85,6 +85,41 @@ at the empty repo and prompt on first manual save).
 - Routes: `git-track`/`git-untrack`, `git-commit` (Save-version) + `git-log`/`git-status`/
   `git-info`; surfaced in `SourceControl.tsx`.
 
+## External edits: conflict-safe writes
+
+Skill files have **other writers** — coding agents in the app's own terminals, `git
+pull`/checkout, formatters, vim. The editor must never **silently clobber** them, and should
+**show the latest** when it safely can. The principle: *never overwrite a disk version newer
+than the one you loaded, and never silently discard unsaved edits.* We adopt **VS Code's
+on-disk reconciliation** — not Notion's op-sync (Notion owns its datastore and every writer
+speaks its protocol; ours are dumb whole-file emitters, so a CRDT/op layer has no anchor) —
+with the **per-skill git** as the eventual merge + recovery engine. Wordless autosave is an
+*asset* here: each successful write refreshes the baseline, so the merge base stays fresh and
+conflicts stay rare.
+
+- **Optimistic-concurrency tag.** `read-file` returns an `etag` (sha256 prefix of the bytes);
+  the editor echoes it on `write-file` as `expectedEtag`. `write_file_impl` is a
+  **compare-and-swap**: if disk no longer matches the tag it returns `WriteOutcome::Stale`
+  (carrying the current disk bytes) **instead of overwriting**. A `None` tag = legacy
+  unconditional overwrite (callers not yet tracking a baseline, e.g. `saveSkillMd`).
+- **Clean buffer → silent reload.** A `useExternalFileSync` poll (`/api/stat-file` — mtime+size
+  only, gated full re-read on change) plus a window-focus re-read detect external writes while
+  the file is open; with a clean buffer the latest is swapped in (the text editors in place via
+  `useAutosave().markClean` so the cursor survives and it isn't written back; the SKILL.md form
+  via `reload(true)`). Focus alone was insufficient — the common case is an agent in Studio's
+  own terminal, which never blurs the window. **No fs-watcher** — a poll rides the HTTP-only
+  transport identically local or over the SSH tunnel; the CAS, not the poll, is the no-clobber
+  guarantee.
+- **Dirty buffer → conflict.** An external change while the buffer has unsaved edits (caught by
+  the poll, or by a stale autosave's CAS) surfaces a **non-blocking inline banner** (Use disk /
+  Keep mine), never a modal (autosave is wordless and fires constantly, so it can't pop a dialog
+  per write) and never `window.confirm`. The user's edits are kept either way.
+- **Implemented:** CAS + etag end-to-end; the `useExternalFileSync` stat-poll; reconcile in
+  `FilePane`, `SkillDocument` (the SKILL.md form — CAS + clean reload + banner), and
+  `MarkdownRoute`. **Deferred (slice 2):** `git merge-file` 3-way auto-merge of *disjoint* edits
+  (so most external changes reconcile invisibly — banner only on a true overlap) and a `git
+  stash create` snapshot before any force-overwrite (so "Keep mine" is always recoverable).
+
 ## Dev workflows
 
 | Goal | Backend | Frontend | Open |
