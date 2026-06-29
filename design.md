@@ -36,6 +36,18 @@ transports silently diverge — a feature wired only through `invoke` broke brow
   the remote model. Browse the (possibly remote) fs via `/api/list-dir` + the in-app
   `FolderPicker`; import via `/api/import-zip`; export via `/api/download`.
 
+*Skill packaging (`.skill`):* export emits a **`.skill`** — a deflate zip with one top-level
+`name/` folder, the shareable install unit (import accepts `.skill` and `.zip` alike; a `.skill`
+*is* a zip). Opinionated exclusions in `skill::build_zip`: **`.git`** (so history-resident `.env`
+can't leak — same threat the `remotesync` `env_in_history` guard blocks on the publish channel),
+`.venv`, build junk, and any on-disk `.env` (the opt-in "bundle secrets" path writes an
+authoritative one). **The rule for `IGNORED_DIRS`: leave out only per-machine build/runtime
+state and secrets — never authored content.** So `node_modules`/`.next`/`__pycache__` go, but
+`evals/`, `references/`, `assets/`, `scripts/` all ship — they're part of the skill. Packaging is **gated on `skill::validate_skill_md`** — a parseable, allow-listed
+frontmatter head (kebab-case `name` ≤64, angle-bracket-free `description` ≤1024) — so an emitted
+`.skill` always installs cleanly; the gate's reason surfaces in the UI (`exportSkill` fetches the
+bytes as a blob precisely so a rejection isn't saved as the "file").
+
 *Reference (keyless commit messages):* `commitmsg.rs` (diff prep, cache) → `commit_agent.rs`
 shells out to a logged-in coding-agent CLI (Claude Code → Codex → Gemini, keyless via
 subscription OAuth; opencode last, BYO-key); `engine.rs` (llama.cpp) is opt-in offline

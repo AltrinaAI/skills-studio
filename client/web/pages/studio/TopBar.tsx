@@ -112,13 +112,13 @@ export default function TopBar({
       <button
         type="button"
         onClick={onExport}
-        title="Export skill as .zip"
+        title="Package skill as a .skill file"
         className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted hover:bg-panel hover:text-fg"
       >
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" />
         </svg>
-        <span className="hidden sm:inline">Export .zip</span>
+        <span className="hidden sm:inline">Export .skill</span>
       </button>
     </NavBar>
   );

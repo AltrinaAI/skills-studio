@@ -145,11 +145,24 @@ export default function StudioLayout() {
     reload();
   };
 
-  // Skills with no declared env export in one click; otherwise the dialog surfaces
-  // the bundle-secrets option and the not-bundled warning.
-  const onExport = () => {
-    if (requiredEnv(data.frontmatter).length === 0) void api.exportZip(data.root);
-    else setExportOpen(true);
+  // Skills with no declared env package in one click; otherwise the dialog
+  // surfaces the bundle-secrets option and the not-bundled warning. A failed
+  // package (e.g. the validate gate rejecting bad frontmatter) is shown inline.
+  const onExport = async () => {
+    if (requiredEnv(data.frontmatter).length > 0) {
+      setExportOpen(true);
+      return;
+    }
+    try {
+      await api.exportSkill(data.root);
+    } catch (e) {
+      await confirm({
+        title: "Couldn't package the skill",
+        body: e instanceof Error ? e.message : String(e),
+        confirmLabel: "OK",
+        cancelLabel: "Close",
+      });
+    }
   };
 
   // After a delete the folder is gone — bypass the unsaved-changes guard (any

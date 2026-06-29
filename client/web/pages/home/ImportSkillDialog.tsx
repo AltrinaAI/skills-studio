@@ -31,9 +31,10 @@ function fileToBase64(file: File): Promise<string> {
 }
 
 /**
- * Import an existing skill into a chosen home — from a folder or a `.zip` (the
- * inverse of Export). Lands a copy under the skill's name; if it carries a `.env`,
- * offers to load those values into the secret store rather than into the folder.
+ * Import an existing skill into a chosen home — from a folder or a `.skill`/`.zip`
+ * archive (the inverse of Export). Lands a copy under the skill's name; if it
+ * carries a `.env`, offers to load those values into the secret store rather than
+ * into the folder. (`.skill` is just a zip, so both extensions extract the same.)
  */
 export default function ImportSkillDialog({
   onClose,
@@ -97,13 +98,13 @@ export default function ImportSkillDialog({
     if (url) void attempt((ow) => api.importSkillFromRemote(url, target, ow));
   };
 
-  // File drop onto the dropzone (expects a `.zip`); the buttons cover folder/zip too.
+  // File drop onto the dropzone (expects a `.skill`/`.zip`); buttons cover folder too.
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragging(false);
     const file = e.dataTransfer.files?.[0];
-    if (file && /\.zip$/i.test(file.name)) importZipFile(file);
-    else if (file) setPhase({ t: "error", message: "Drop a .zip file (or use “Choose folder”)." });
+    if (file && /\.(skill|zip)$/i.test(file.name)) importZipFile(file);
+    else if (file) setPhase({ t: "error", message: "Drop a .skill or .zip file (or use “Choose folder”)." });
   };
 
   const loadSecrets = async (result: ImportResult) => {
@@ -181,9 +182,9 @@ export default function ImportSkillDialog({
                 }`}
               >
                 <span className="text-sm font-medium text-fg">
-                  Drop a .zip here, or click to choose
+                  Drop a .skill or .zip here, or click to choose
                 </span>
-                <span className="text-xs text-muted">Exported skill archives (SKILL.md inside)</span>
+                <span className="text-xs text-muted">Packaged skills (SKILL.md inside)</span>
               </button>
               <div className="flex items-center gap-3">
                 <span className="h-px flex-1 bg-border" />
@@ -213,7 +214,7 @@ export default function ImportSkillDialog({
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".zip,application/zip"
+                accept=".skill,.zip,application/zip"
                 className="hidden"
                 onChange={(e) => {
                   const file = e.target.files?.[0];

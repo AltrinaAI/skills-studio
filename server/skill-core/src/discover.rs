@@ -49,7 +49,7 @@ fn is_ignored_dir(p: &Path) -> bool {
 }
 
 /// Extract the leading `---` ... `---` YAML block (BOM-tolerant).
-fn extract_frontmatter(raw: &str) -> Option<String> {
+pub(crate) fn extract_frontmatter(raw: &str) -> Option<String> {
     let s = raw.strip_prefix('\u{feff}').unwrap_or(raw);
     let mut lines = s.lines();
     match lines.next() {

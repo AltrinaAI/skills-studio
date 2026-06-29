@@ -224,19 +224,39 @@ export async function imageDataUrl(root: string, rel: string): Promise<string> {
 }
 
 /**
- * Export the skill as a .zip via a `/api/download` link (browser download).
- * `vars` (declared env names present in the store) bundles their values as a
- * `.env` so the recipient can run it immediately; empty means declaration-only.
+ * Package the skill into a `.skill` file (a deflate zip) and save it via the
+ * browser. `vars` (declared env names present in the store) bundles their values
+ * as a `.env` so the recipient can run it immediately; empty = declaration-only.
+ *
+ * Fetched as a blob rather than a bare `<a download>` so the server's validate
+ * gate — and the size cap — surface as a thrown error the caller can show,
+ * instead of the browser silently saving a JSON error body as the "file".
  */
-export async function exportZip(root: string, vars: string[] = []): Promise<void> {
+export async function exportSkill(root: string, vars: string[] = []): Promise<void> {
   const q = new URLSearchParams({ root });
   if (vars.length) q.set("vars", vars.join(","));
+  const res = await fetch(`${API_BASE}/api/download?${q.toString()}`);
+  if (!res.ok) {
+    let msg = `Couldn't package the skill (HTTP ${res.status}).`;
+    try {
+      const j = await res.json();
+      if (j?.error) msg = j.error;
+    } catch {
+      /* non-JSON body — keep the generic message */
+    }
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  const cd = res.headers.get("Content-Disposition") ?? "";
+  const filename = /filename="?([^";]+)"?/.exec(cd)?.[1] ?? "skill.skill";
+  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = `${API_BASE}/api/download?${q.toString()}`;
-  a.rel = "noopener";
+  a.href = url;
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   a.remove();
+  URL.revokeObjectURL(url);
 }
 
 /** Scan the skill's files for which managed secrets it references (auto-detect). */

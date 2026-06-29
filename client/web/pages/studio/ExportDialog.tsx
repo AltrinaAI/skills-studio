@@ -8,7 +8,7 @@ import type { SecretEntry } from "@/lib/api";
 
 /**
  * Export confirmation for a skill that declares required env vars. Lets the user
- * optionally bundle the matching secret *values* (a `.env` in the .zip) so the
+ * optionally bundle the matching secret *values* (a `.env` in the `.skill`) so the
  * recipient can run it immediately, and warns when declared vars won't travel —
  * so a shared skill isn't silently unusable on the other end.
  */
@@ -26,6 +26,7 @@ export default function ExportDialog({
   const [stored, setStored] = useState<Set<string> | null>(null);
   const [includeEnv, setIncludeEnv] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     api
@@ -42,9 +43,12 @@ export default function ExportDialog({
 
   const doExport = async () => {
     setBusy(true);
+    setErr(null);
     try {
-      await api.exportZip(root, bundling ? present : []);
+      await api.exportSkill(root, bundling ? present : []);
       onClose();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -53,7 +57,7 @@ export default function ExportDialog({
   return (
     <Modal
       title="Export skill"
-      titleAside={<span className="truncate font-mono text-xs text-faint">{dirName}.zip</span>}
+      titleAside={<span className="truncate font-mono text-xs text-faint">{dirName}.skill</span>}
       onClose={onClose}
     >
         <div className="space-y-4 px-5 py-4">
@@ -110,7 +114,7 @@ export default function ExportDialog({
               {bundling ? (
                 <div className="space-y-2">
                   <p className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">
-                    This .zip will contain the real values of{" "}
+                    This .skill will contain the real values of{" "}
                     <span className="font-mono">{present.join(", ")}</span>. Only share it with people you’d hand these keys to.
                   </p>
                   {missing.length > 0 && (
@@ -133,12 +137,18 @@ export default function ExportDialog({
           )}
         </div>
 
+        {err && (
+          <p className="mx-5 -mt-1 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">
+            {err}
+          </p>
+        )}
+
         <div className="flex justify-end gap-2 border-t border-border px-5 py-3">
           <button type="button" onClick={onClose} className={btnGhost}>
             Cancel
           </button>
           <button type="button" onClick={() => void doExport()} disabled={busy || stored === null} className={btnPrimary}>
-            {busy ? "Exporting…" : "Export .zip"}
+            {busy ? "Exporting…" : "Export .skill"}
           </button>
         </div>
     </Modal>

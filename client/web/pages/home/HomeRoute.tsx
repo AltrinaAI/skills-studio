@@ -673,7 +673,7 @@ function StartPanel({
             <ImportIcon />
             Import
           </span>
-          <span className="text-xs text-muted">From a folder or .zip</span>
+          <span className="text-xs text-muted">From a folder, .skill or .zip</span>
         </button>
       </div>
       {count > 0 && (
@@ -871,7 +871,7 @@ export function Component() {
         <button
           type="button"
           onClick={() => setImportOpen(true)}
-          title="Import a skill from a folder or .zip"
+          title="Import a skill from a folder, .skill or .zip"
           className="flex items-center gap-1.5 rounded-md px-2 py-1 text-muted hover:bg-panel hover:text-fg"
         >
           <ImportIcon />

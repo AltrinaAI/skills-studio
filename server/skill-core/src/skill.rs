@@ -546,12 +546,93 @@ pub fn zip_skill_bytes(root_input: &str, env_vars: &[String]) -> Result<(String,
     if !root.join("SKILL.md").exists() {
         return Err("Not a skill directory (no SKILL.md).".into());
     }
+    // Gate packaging on valid frontmatter so an emitted `.skill` is guaranteed to
+    // install cleanly — the loader and other agents only honour a well-formed head.
+    validate_skill_md(&root)?;
     let dir_name = root
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "skill".into());
     let buf = build_zip(&root, &dir_name, env_vars)?;
-    Ok((format!("{dir_name}.zip"), buf))
+    // A `.skill` is a deflate zip (one top-level `name/` folder), minus `.git`,
+    // `.venv`, build junk and any on-disk `.env` — the shareable install unit.
+    Ok((format!("{dir_name}.skill"), buf))
+}
+
+/// Frontmatter keys a `.skill` may declare; anything else fails validation.
+/// Mirrors the skill-creator packager's allow-list (`metadata` is the catch-all
+/// for nested fields like `required-env`).
+const ALLOWED_FRONTMATTER_KEYS: [&str; 6] =
+    ["name", "description", "license", "allowed-tools", "metadata", "compatibility"];
+
+/// Validate a skill's `SKILL.md` head before packaging: a parseable YAML mapping,
+/// only known keys, a kebab-case `name` (≤64) and an angle-bracket-free
+/// `description` (≤1024); `compatibility` (≤500) if present. Returns a
+/// human-readable reason on the first failure (surfaced to the user on export).
+pub fn validate_skill_md(root: &Path) -> Result<(), String> {
+    let raw = std::fs::read_to_string(root.join("SKILL.md"))
+        .map_err(|_| "Couldn't read SKILL.md.".to_string())?;
+    let block = crate::discover::extract_frontmatter(&raw)
+        .ok_or("SKILL.md has no `---` frontmatter block.")?;
+    let value: serde_yaml::Value =
+        serde_yaml::from_str(&block).map_err(|e| format!("SKILL.md frontmatter isn't valid YAML: {e}"))?;
+    let map = value
+        .as_mapping()
+        .ok_or("SKILL.md frontmatter must be a set of `key: value` fields.")?;
+
+    // One pass: reject unknown keys, capture the ones we constrain.
+    let (mut name, mut description, mut compatibility) = (None, None, None);
+    for (key, val) in map {
+        let k = key.as_str().unwrap_or_default();
+        if !ALLOWED_FRONTMATTER_KEYS.contains(&k) {
+            return Err(format!(
+                "Unknown frontmatter key `{k}`. Allowed: {}.",
+                ALLOWED_FRONTMATTER_KEYS.join(", ")
+            ));
+        }
+        match k {
+            "name" => name = val.as_str(),
+            "description" => description = val.as_str(),
+            "compatibility" => compatibility = Some(val),
+            _ => {}
+        }
+    }
+
+    let name = name.ok_or("SKILL.md frontmatter is missing a `name`.")?;
+    if !is_kebab_case(name) {
+        return Err(format!(
+            "`name` must be kebab-case — lowercase letters, digits and single hyphens (got `{name}`)."
+        ));
+    }
+    if name.len() > 64 {
+        return Err("`name` must be 64 characters or fewer.".into());
+    }
+
+    let description = description.ok_or("SKILL.md frontmatter is missing a `description`.")?;
+    if description.contains('<') || description.contains('>') {
+        return Err("`description` can't contain angle brackets (`<` or `>`).".into());
+    }
+    if description.chars().count() > 1024 {
+        return Err("`description` must be 1024 characters or fewer.".into());
+    }
+
+    if let Some(compat) = compatibility {
+        let c = compat.as_str().ok_or("`compatibility` must be a string.")?;
+        if c.chars().count() > 500 {
+            return Err("`compatibility` must be 500 characters or fewer.".into());
+        }
+    }
+    Ok(())
+}
+
+/// Kebab-case: non-empty, lowercase alphanumerics in hyphen-separated segments,
+/// with no leading/trailing or doubled hyphens.
+fn is_kebab_case(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with('-')
+        && !s.ends_with('-')
+        && !s.contains("--")
+        && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 fn build_zip(root: &Path, dir_name: &str, env_vars: &[String]) -> Result<Vec<u8>, String> {
@@ -841,6 +922,39 @@ mod tests {
         // Empty / invalid payloads are rejected.
         assert!(write_asset_impl(&root, "assets", "x.png", "").is_err());
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn validate_gate_and_skill_extension() {
+        let base = std::env::temp_dir().join(format!("ass_pkg_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let skill = base.join("my-skill");
+        std::fs::create_dir_all(&skill).unwrap();
+        let root = skill.to_string_lossy().to_string();
+
+        // A valid head packages, and the artifact carries the `.skill` extension.
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: my-skill\ndescription: Does a thing.\n---\nBody\n",
+        )
+        .unwrap();
+        let (filename, bytes) = zip_skill_bytes(&root, &[]).unwrap();
+        assert_eq!(filename, "my-skill.skill");
+        assert!(!bytes.is_empty());
+
+        // Each malformed head is refused before any bytes are written.
+        for (md, needle) in [
+            ("---\nname: My_Skill\ndescription: ok\n---\n", "kebab"),
+            ("---\nname: my-skill\ndescription: a <b>\n---\n", "angle"),
+            ("---\nname: my-skill\ndescription: ok\nversion: 1\n---\n", "unknown frontmatter key"),
+            ("---\ndescription: no name\n---\n", "missing a `name`"),
+            ("no frontmatter here\n", "frontmatter"),
+        ] {
+            std::fs::write(skill.join("SKILL.md"), md).unwrap();
+            let err = zip_skill_bytes(&root, &[]).unwrap_err().to_lowercase();
+            assert!(err.contains(needle), "want `{needle}` in `{err}`");
+        }
         let _ = std::fs::remove_dir_all(&base);
     }
 
